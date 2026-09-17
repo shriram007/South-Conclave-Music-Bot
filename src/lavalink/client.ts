@@ -20,6 +20,9 @@ export let discordClient: Client;
 // Track active player messages so we can update or clean them up
 export const activePlayerMessages = new Map<string, string>(); // guildId -> messageId
 
+// Global cache of stream-restricted / login-required video IDs so we never re-select or loop on them
+export const restrictedTrackIds = new Set<string>();
+
 export function initLavalink(client: Client) {
   discordClient = client;
   lavalink = new LavalinkManager({
@@ -202,13 +205,40 @@ export function initLavalink(client: Client) {
   });
 
   lavalink.on("trackError", async (player: Player, track, payload) => {
-    console.error(`[Lavalink] Error playing "${track?.info.title}":`, payload?.exception?.message || payload);
+    const errorMsg = payload?.exception?.message || JSON.stringify(payload);
+    console.error(`[Lavalink] Error playing "${track?.info.title}":`, errorMsg);
+
+    if (!track) return;
+
+    // Cache the failed track ID so neither recovery nor future searches pick it again
+    if (track.info.identifier) {
+      restrictedTrackIds.add(track.info.identifier);
+    }
+
+    const failedId = track.info.identifier;
+    const rawTitle = track.info.title || "";
+    const recoveryAttempts = ((player.getData("recovery_attempts") as number) || 0) + 1;
+    player.setData("recovery_attempts", recoveryAttempts);
+
+    // Circuit breaker: prevent infinite retry loops if all sources fail
+    if (recoveryAttempts > 2) {
+      console.warn(`[Universal Recovery] Max recovery attempts (2) reached for "${rawTitle}". Skipping track.`);
+      player.setData("recovery_attempts", 0);
+      player.setData("recovering_track", false);
+
+      if (player.textChannelId) {
+        const channel = client.channels.cache.get(player.textChannelId) as TextChannel | undefined;
+        channel?.send(`⚠️ **Stream Restricted by YouTube:** All video streams for **${rawTitle}** require Google login. Skipping to next song in queue.`).catch(() => {});
+      }
+      await player.skip().catch(() => {});
+      return;
+    }
 
     // Universal Auto-Recovery for blocked/age-gated/login-required/broken streams
-    if (!player.getData("recovering_track") && track) {
+    if (!player.getData("recovering_track")) {
       try {
         player.setData("recovering_track", true);
-        const rawTitle = track.info.title || "";
+
         const cleanTitle = rawTitle
           .replace(/\|.*/, "")
           .replace(/\[.*?\]/g, "")
@@ -218,38 +248,61 @@ export function initLavalink(client: Client) {
           .replace(/full video/gi, "")
           .replace(/lyric video/gi, "")
           .replace(/4k/gi, "")
+          .replace(/hd/gi, "")
           .trim();
 
-        const fallbackQuery = `${cleanTitle} ${track.info.author || ""}`.trim();
-        console.log(`[Universal Recovery] Stream restricted for "${rawTitle}". Auto-recovering as "${fallbackQuery}"...`);
+        const cleanAuthor = (track.info.author || "").replace(/- Topic/gi, "").trim();
+        const fallbackQuery = `${cleanTitle} ${cleanAuthor}`.trim();
+
+        console.log(`[Universal Recovery] Stream restricted for "${rawTitle}" (ID: ${failedId}). Attempt #${recoveryAttempts} auto-recovering as "${fallbackQuery}"...`);
 
         // Check alternate connected nodes first if the current node had the playback failure
         const connectedNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected);
         const alternateNodes = connectedNodes.filter((n) => n.id !== player.node.id);
         const nodesToTry = [...alternateNodes, player.node];
 
-        let recoveredTrack: any = null;
+        let recoveredTrack: Track | null = null;
         let targetNode = player.node;
 
         for (const node of nodesToTry) {
           try {
-            // Try YouTube Music (ytmsearch) first for official audio track
-            let searchRes = await node.search({ query: fallbackQuery, source: "ytmsearch" }, track.requester);
-            if (!searchRes?.tracks?.length || searchRes.loadType === "empty" || searchRes.loadType === "error") {
-              searchRes = await node.search({ query: `${cleanTitle} audio`, source: "ytsearch" }, track.requester);
+            // Strategy 1: SoundCloud (scsearch) - ZERO login restrictions & high-quality audio
+            const scRes = await node.search({ query: fallbackQuery, source: "scsearch" }, track.requester);
+            if (scRes?.tracks?.length && scRes.loadType !== "empty" && scRes.loadType !== "error") {
+              const scCandidate = scRes.tracks.find(
+                (t) => t.info.identifier !== failedId && !restrictedTrackIds.has(t.info.identifier)
+              );
+              if (scCandidate) {
+                recoveredTrack = scCandidate;
+                targetNode = node;
+                console.log(`[Universal Recovery] Found unrestricted SoundCloud alternative on node "${node.id}": "${scCandidate.info.title}"`);
+                break;
+              }
             }
-            if (searchRes?.tracks?.[0]) {
-              recoveredTrack = searchRes.tracks[0];
-              targetNode = node;
-              break;
+
+            // Strategy 2: YouTube Music (ytmsearch) with cleanTitle audio - exclude failedId
+            let ytRes = await node.search({ query: `${cleanTitle} audio`, source: "ytmsearch" }, track.requester);
+            if (!ytRes?.tracks?.length || ytRes.loadType === "empty" || ytRes.loadType === "error") {
+              ytRes = await node.search({ query: `${cleanTitle} lyrical`, source: "ytsearch" }, track.requester);
             }
-          } catch (e) {
-            console.warn(`[Universal Recovery] Search failed on node ${node.id}:`, (e as any)?.message);
+            if (ytRes?.tracks?.length) {
+              const ytCandidate = ytRes.tracks.find(
+                (t) => t.info.identifier !== failedId && !restrictedTrackIds.has(t.info.identifier)
+              );
+              if (ytCandidate) {
+                recoveredTrack = ytCandidate;
+                targetNode = node;
+                console.log(`[Universal Recovery] Found alternative YouTube stream on node "${node.id}": "${ytCandidate.info.title}"`);
+                break;
+              }
+            }
+          } catch (e: any) {
+            console.warn(`[Universal Recovery] Search failed on node ${node.id}:`, e?.message);
           }
         }
 
         if (recoveredTrack) {
-          // If the recovery track was found on another node and current node failed, migrate player
+          // If the recovery track was found on another node, migrate player
           if (player.node.id !== targetNode.id) {
             console.log(`[Universal Recovery] Migrating player from ${player.node.id} to ${targetNode.id}...`);
             await player.changeNode(targetNode, false).catch((err) => {
@@ -262,10 +315,13 @@ export function initLavalink(client: Client) {
 
           if (player.textChannelId) {
             const channel = client.channels.cache.get(player.textChannelId) as TextChannel | undefined;
-            channel?.send(`🔄 **Auto-Recovered:** Login/stream restriction detected on video. Swapped to high-fidelity audio stream: **${recoveredTrack.info.title}**`).catch(() => {});
+            channel?.send(`🔄 **Auto-Recovered:** Login restriction detected on video. Swapped to high-fidelity stream: **[${recoveredTrack.info.title}](${recoveredTrack.info.uri})**`).catch(() => {});
           }
 
-          setTimeout(() => player.setData("recovering_track", false), 5000);
+          setTimeout(() => {
+            player.setData("recovering_track", false);
+            player.setData("recovery_attempts", 0);
+          }, 6000);
           return;
         }
       } catch (err) {

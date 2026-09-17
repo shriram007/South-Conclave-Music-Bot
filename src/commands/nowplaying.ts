@@ -17,8 +17,9 @@ export const nowplayingCommand = {
     }
 
     const playerMsg = buildPlayerMessage(player);
-    const reply = await interaction.reply({ ...playerMsg, fetchReply: true });
-    activePlayerMessages.set(interaction.guildId!, reply.id);
-    player.setData("active_message_id", reply.id);
+    const reply = await interaction.reply({ ...playerMsg, withResponse: true });
+    const replyMsg = reply.resource?.message || (await interaction.fetchReply());
+    activePlayerMessages.set(interaction.guildId!, replyMsg.id);
+    player.setData("active_message_id", replyMsg.id);
   },
 };

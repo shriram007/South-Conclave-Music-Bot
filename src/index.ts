@@ -1,4 +1,4 @@
-import { ActivityType, Client, GatewayIntentBits } from "discord.js";
+import { ActivityType, Client, Events, GatewayIntentBits } from "discord.js";
 import { config } from "./config.js";
 import { initLavalink, lavalink } from "./lavalink/client.js";
 import { onReady } from "./events/ready.js";
@@ -51,7 +51,7 @@ client.on("error", (error) => {
 });
 
 // Bot Lifecycle Events
-client.once("ready", () => onReady(client));
+client.once(Events.ClientReady, () => onReady(client));
 client.on("guildCreate", async (guild) => {
   console.log(`🎉 Joined new server: "${guild.name}" (ID: ${guild.id})`);
   try {

@@ -4,7 +4,7 @@ import {
   EmbedBuilder,
   SlashCommandBuilder,
 } from "discord.js";
-import { getOrCreatePlayer, lavalink, updateActivePlayerMessage } from "../lavalink/client.js";
+import { getOrCreatePlayer, lavalink, restrictedTrackIds, updateActivePlayerMessage } from "../lavalink/client.js";
 import { formatDuration, getSourceInfo } from "../utils/formatters.js";
 
 async function resolveSpotifyTrack(url: string): Promise<string | null> {
@@ -65,24 +65,44 @@ async function resolveTrackQuery(rawQuery: string): Promise<{ query: string; isU
   return { query: trimmed, isUrl };
 }
 
-async function smartSearch(player: any, query: string, isUrl: boolean, user: any) {
+/**
+ * Smart Multi-Tier Audio Search
+ * 1. Resolves Spotify / Apple Music / JioSaavn via node search
+ * 2. Tries YouTube Music (256k HQ) across available cluster nodes
+ * 3. Tries SoundCloud (purity, no YouTube login wall)
+ * 4. Tries clean YouTube audio streams (filtering out video/age-gated tags)
+ */
+async function smartSearch(
+  player: any,
+  query: string,
+  isUrl: boolean,
+  user: any
+) {
   if (isUrl) {
+    // Check if the URL was previously marked as restricted / login-required
+    for (const id of restrictedTrackIds) {
+      if (query.includes(id)) {
+        console.warn(`[SmartSearch] Detected previously restricted URL (${id}). Falling back to clean audio search...`);
+        return null;
+      }
+    }
+
     try {
-      const direct = await player.search({ query }, user);
-      if (direct?.tracks?.length && direct.loadType !== "empty" && direct.loadType !== "error") {
-        return direct;
+      const directRes = await player.search({ query }, user);
+      if (directRes?.tracks?.length && directRes.loadType !== "empty" && directRes.loadType !== "error") {
+        return directRes;
       }
     } catch {}
 
-    for (const node of lavalink.nodeManager.nodes.values()) {
-      if (node.connected && node.id !== player.node.id) {
-        try {
-          const nodeRes = await node.search({ query }, user);
-          if (nodeRes?.tracks?.length && nodeRes.loadType !== "empty" && nodeRes.loadType !== "error") {
-            return nodeRes;
-          }
-        } catch {}
-      }
+    // Fallback URL search across alternate connected nodes
+    const otherNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n: any) => n.id !== player.node.id && n.connected);
+    for (const node of otherNodes) {
+      try {
+        const nodeRes = await node.search({ query }, user);
+        if (nodeRes?.tracks?.length && nodeRes.loadType !== "empty" && nodeRes.loadType !== "error") {
+          return nodeRes;
+        }
+      } catch {}
     }
     return null;
   }
@@ -97,21 +117,27 @@ async function smartSearch(player: any, query: string, isUrl: boolean, user: any
     try {
       const res = await node.search({ query, source: "ytmsearch" }, user);
       if (res?.tracks?.length && res.loadType !== "empty" && res.loadType !== "error") {
-        console.log(`[SmartSearch] Found "${res.tracks[0].info.title}" via ytmsearch on node "${node.id}"`);
-        return res;
+        const viable = res.tracks.filter((t: any) => !restrictedTrackIds.has(t.info.identifier));
+        if (viable.length > 0) {
+          console.log(`[SmartSearch] Found "${viable[0].info.title}" via ytmsearch on node "${node.id}"`);
+          return { ...res, tracks: viable };
+        }
       }
     } catch (e) {
       console.warn(`[SmartSearch] ytmsearch on "${node.id}" failed:`, (e as any)?.message);
     }
   }
 
-  // 2. Try SoundCloud search (scsearch)
+  // 2. Try SoundCloud search (scsearch) - ZERO YouTube login walls, fast & unrestricted
   for (const node of nodesToTry) {
     try {
       const res = await node.search({ query, source: "scsearch" }, user);
       if (res?.tracks?.length && res.loadType !== "empty" && res.loadType !== "error") {
-        console.log(`[SmartSearch] Found "${res.tracks[0].info.title}" via scsearch on node "${node.id}"`);
-        return res;
+        const viable = res.tracks.filter((t: any) => !restrictedTrackIds.has(t.info.identifier));
+        if (viable.length > 0) {
+          console.log(`[SmartSearch] Found "${viable[0].info.title}" via scsearch on node "${node.id}"`);
+          return { ...res, tracks: viable };
+        }
       }
     } catch {}
   }
@@ -121,8 +147,11 @@ async function smartSearch(player: any, query: string, isUrl: boolean, user: any
     try {
       const res = await node.search({ query: `${query} audio`, source: "ytsearch" }, user);
       if (res?.tracks?.length && res.loadType !== "empty" && res.loadType !== "error") {
-        console.log(`[SmartSearch] Found "${res.tracks[0].info.title}" via ytsearch (audio) on node "${node.id}"`);
-        return res;
+        const viable = res.tracks.filter((t: any) => !restrictedTrackIds.has(t.info.identifier));
+        if (viable.length > 0) {
+          console.log(`[SmartSearch] Found "${viable[0].info.title}" via ytsearch (audio) on node "${node.id}"`);
+          return { ...res, tracks: viable };
+        }
       }
     } catch {}
   }
@@ -132,8 +161,11 @@ async function smartSearch(player: any, query: string, isUrl: boolean, user: any
     try {
       const res = await node.search({ query, source: "ytsearch" }, user);
       if (res?.tracks?.length && res.loadType !== "empty" && res.loadType !== "error") {
-        console.log(`[SmartSearch] Found "${res.tracks[0].info.title}" via ytsearch on node "${node.id}"`);
-        return res;
+        const viable = res.tracks.filter((t: any) => !restrictedTrackIds.has(t.info.identifier));
+        if (viable.length > 0) {
+          console.log(`[SmartSearch] Found "${viable[0].info.title}" via ytsearch on node "${node.id}"`);
+          return { ...res, tracks: viable };
+        }
       }
     } catch {}
   }
