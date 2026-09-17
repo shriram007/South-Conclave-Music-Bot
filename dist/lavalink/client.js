@@ -1,5 +1,4 @@
 import { LavalinkManager } from "lavalink-client";
-import { config } from "../config.js";
 import { buildPlayerMessage } from "./playerUI.js";
 import { getChannelBitrateInfo } from "../utils/formatters.js";
 import { is247Enabled } from "../utils/twentyFourSeven.js";
@@ -12,18 +11,25 @@ export function initLavalink(client) {
     lavalink = new LavalinkManager({
         nodes: [
             {
+                authorization: "https://discord.gg/mjS5J2K3ep",
+                host: "lava-v4.millohost.my.id",
+                port: 443,
+                secure: true,
+                id: "Millo-SingaporeNode",
+            },
+            {
+                authorization: "https://seretia.link/discord",
+                host: "lavalinkv4.serenetia.com",
+                port: 443,
+                secure: true,
+                id: "Serenetia-HighSpeed",
+            },
+            {
                 authorization: "free",
                 host: "lavalink-v4.triniumhost.com",
                 port: 443,
                 secure: true,
                 id: "Trinium-FastNode",
-            },
-            {
-                authorization: config.lavalink.password,
-                host: config.lavalink.host,
-                port: config.lavalink.port,
-                secure: config.lavalink.secure,
-                id: "Jirayu-Node",
             },
         ],
         sendToShard: (guildId, payload) => {

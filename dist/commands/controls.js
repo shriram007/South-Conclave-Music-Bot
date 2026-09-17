@@ -174,14 +174,69 @@ export const seekCommand = {
         return interaction.reply(`⏩ Jumped to **${formatDuration(targetMs)}**`);
     },
 };
+function parseIndicesToRemove(trackInput, toInput, queueLength = 0) {
+    const clean = trackInput.trim().toLowerCase();
+    const set = new Set();
+    if (toInput && !isNaN(toInput)) {
+        const from = parseInt(clean, 10);
+        if (isNaN(from))
+            return { indices: [], error: "❌ 'track' must be a valid number when using 'to' range." };
+        const start = Math.min(from, toInput);
+        const end = Math.max(from, toInput);
+        for (let i = start; i <= end; i++)
+            set.add(i);
+    }
+    else if (clean.includes("to")) {
+        const parts = clean.split(/\s*to\s*/);
+        const from = parseInt(parts[0], 10);
+        const to = parseInt(parts[1], 10);
+        if (isNaN(from) || isNaN(to))
+            return { indices: [], error: "❌ Invalid range format. Use e.g. `2 to 5` or `2-5`." };
+        const start = Math.min(from, to);
+        const end = Math.max(from, to);
+        for (let i = start; i <= end; i++)
+            set.add(i);
+    }
+    else {
+        const chunks = clean.split(/[,;\s]+/);
+        for (const chunk of chunks) {
+            if (!chunk)
+                continue;
+            if (chunk.includes("-")) {
+                const [rStart, rEnd] = chunk.split("-").map(Number);
+                if (isNaN(rStart) || isNaN(rEnd))
+                    return { indices: [], error: `❌ Invalid range: \`${chunk}\`` };
+                const start = Math.min(rStart, rEnd);
+                const end = Math.max(rStart, rEnd);
+                for (let i = start; i <= end; i++)
+                    set.add(i);
+            }
+            else {
+                const num = parseInt(chunk, 10);
+                if (isNaN(num))
+                    return { indices: [], error: `❌ Invalid track number: \`${chunk}\`` };
+                set.add(num);
+            }
+        }
+    }
+    const indices = Array.from(set).filter((n) => n >= 1 && n <= queueLength).sort((a, b) => b - a);
+    if (indices.length === 0) {
+        return { indices: [], error: `❌ No valid track numbers found within current queue size (${queueLength}).` };
+    }
+    return { indices };
+}
 export const removeCommand = {
     data: new SlashCommandBuilder()
         .setName("remove")
-        .setDescription("Remove a specific track from the queue by its number")
+        .setDescription("Remove one, multiple, or a range of tracks from the queue")
+        .addStringOption((opt) => opt
+        .setName("track")
+        .setDescription("Track number, comma list, or range (e.g. '3', '1, 3, 5', '2-6', '2 to 6')")
+        .setRequired(true))
         .addIntegerOption((opt) => opt
-        .setName("position")
-        .setDescription("The track number shown in /queue to remove (e.g. 1, 2, 3)")
-        .setRequired(true)
+        .setName("to")
+        .setDescription("Optional end position if removing a range (e.g. track: 2, to: 5)")
+        .setRequired(false)
         .setMinValue(1)),
     async execute(interaction) {
         const player = await getPlayerWithGate(interaction);
@@ -194,17 +249,33 @@ export const removeCommand = {
                 ephemeral: true,
             });
         }
-        const pos = interaction.options.getInteger("position", true);
-        if (pos > tracks.length) {
+        const trackInput = interaction.options.getString("track", true);
+        const toInput = interaction.options.getInteger("to", false);
+        const { indices, error } = parseIndicesToRemove(trackInput, toInput, tracks.length);
+        if (error || !indices || indices.length === 0) {
             return interaction.reply({
-                content: `❌ Invalid position! The queue currently has **${tracks.length}** song(s). Use \`/queue\` to check track numbers.`,
+                content: error || `❌ Could not find valid track numbers to remove. Current queue size: **${tracks.length}**.`,
                 ephemeral: true,
             });
         }
-        const removedTrack = tracks[pos - 1];
-        await player.queue.remove(pos - 1);
+        const removedNames = [];
+        // indices are sorted descending so splicing from high to low preserves earlier indices
+        for (const pos of indices) {
+            const idx = pos - 1;
+            const t = tracks[idx];
+            if (t) {
+                removedNames.push(`**#${pos}** ${t.info.title}`);
+                tracks.splice(idx, 1);
+            }
+        }
+        await player.queue.utils.save();
         await updateActivePlayerMessage(player);
-        return interaction.reply(`🗑️ Removed **#${pos} [${removedTrack.info.title}](${removedTrack.info.uri})** from the queue.`);
+        if (indices.length === 1) {
+            return interaction.reply(`🗑️ Removed ${removedNames[0]} from the queue.`);
+        }
+        const preview = removedNames.slice(0, 4).join("\n");
+        const extra = removedNames.length > 4 ? `\n...and ${removedNames.length - 4} more` : "";
+        return interaction.reply(`🗑️ Removed **${indices.length}** tracks from the queue:\n${preview}${extra}`);
     },
 };
 export const clearCommand = {

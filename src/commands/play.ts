@@ -262,7 +262,7 @@ export const playCommand = {
         rawQuery.includes("list=PL")
       );
 
-      if (res.loadType === "playlist" && (isActualPlaylist || res.playlist)) {
+      if (res.loadType === "playlist" && isActualPlaylist) {
         for (const t of res.tracks) {
           t.requester = interaction.user;
         }
