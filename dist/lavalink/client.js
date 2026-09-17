@@ -11,6 +11,42 @@ export let discordClient;
 export const activePlayerMessages = new Map(); // guildId -> messageId
 // Global cache of stream-restricted / login-required video IDs so we never re-select or loop on them
 export const restrictedTrackIds = new Set();
+/**
+ * Validates that an autoplay recommendation is a genuine new song and not a live/remix/cover of a previous song
+ */
+export function isSameSongOrJunk(candidateTitle, previousTracks) {
+    const simplify = (str) => str
+        .toLowerCase()
+        .replace(/\|.*/g, "")
+        .replace(/\[.*?\]/g, "")
+        .replace(/\(.*?\)/g, "")
+        .replace(/feat\..*/g, "")
+        .replace(/ft\..*/g, "")
+        .replace(/official.*/g, "")
+        .replace(/audio.*/g, "")
+        .replace(/video.*/g, "")
+        .replace(/remix.*/g, "")
+        .replace(/live.*/g, "")
+        .replace(/version.*/g, "")
+        .replace(/lyric.*/g, "")
+        .replace(/hd|4k|hq/gi, "")
+        .replace(/[^a-z0-9]/g, "");
+    const lowTitle = candidateTitle.toLowerCase();
+    const junkKeywords = ["karaoke", "instrumental", "tutorial", "tribute", "how to play", "synthesia", "cover", "bass boosted"];
+    if (junkKeywords.some((j) => lowTitle.includes(j)))
+        return true;
+    const candSimp = simplify(candidateTitle);
+    if (!candSimp)
+        return true;
+    for (const prev of previousTracks) {
+        const prevTitle = prev?.info?.title || "";
+        const prevSimp = simplify(prevTitle);
+        if (prevSimp && (candSimp.includes(prevSimp) || prevSimp.includes(candSimp))) {
+            return true; // Collision with a previously played song!
+        }
+    }
+    return false;
+}
 export function initLavalink(client) {
     discordClient = client;
     lavalink = new LavalinkManager({
@@ -174,32 +210,48 @@ export function initLavalink(client) {
             const rawTitle = lastTrack.info.title || "";
             const rawAuthor = (lastTrack.info.author || "").replace(/- Topic/gi, "").trim();
             const cleanTitle = rawTitle.replace(/\|.*/, "").replace(/\[.*?\]/g, "").replace(/\(.*?\)/g, "").trim();
-            console.log(`[Smart Autoplay] Queue ended. Finding recommendation based on "${cleanTitle}" by "${rawAuthor}"...`);
+            console.log(`[Smart Autoplay] Queue ended. Finding fresh recommendation based on "${cleanTitle}" by "${rawAuthor}"...`);
             const targetNode = lavalink.nodeManager.nodes.get("Serenetia-HighSpeed") || player.node;
             const historyIds = new Set(player.queue.previous.map((t) => t.info.identifier));
-            try {
-                let recRes = await targetNode.search({ query: `${rawAuthor} ${cleanTitle} radio`, source: "ytmsearch" }, lastTrack.requester);
-                if (!recRes?.tracks?.length || recRes.loadType === "empty" || recRes.loadType === "error") {
-                    recRes = await targetNode.search({ query: `${rawAuthor} top songs`, source: "ytmsearch" }, lastTrack.requester);
-                }
-                if (recRes?.tracks?.length) {
-                    const candidate = recRes.tracks.find((t) => !historyIds.has(t.info.identifier) && !restrictedTrackIds.has(t.info.identifier));
-                    if (candidate) {
-                        console.log(`[Smart Autoplay] Autoplaying recommendation: "${candidate.info.title}"`);
-                        candidate.requester = lastTrack.requester;
-                        await player.queue.add(candidate);
-                        await player.play();
-                        if (channel) {
-                            channel.send({
-                                content: `📻 **Autoplay Radio:** Playing similar song **[${candidate.info.title}](${candidate.info.uri})**`,
-                            }).then((msg) => autoDeleteMessage(msg, 6000)).catch(() => { });
+            // Try queries that return OTHER songs by the artist or similar artists (not the same song)
+            const queriesToTry = [];
+            if (rawAuthor && rawAuthor.length > 1 && !rawAuthor.toLowerCase().includes("various")) {
+                queriesToTry.push(`${rawAuthor} radio`);
+                queriesToTry.push(`songs similar to ${rawAuthor}`);
+                queriesToTry.push(`${rawAuthor} top tracks`);
+            }
+            queriesToTry.push(`songs like ${cleanTitle}`);
+            let foundTrack = null;
+            for (const query of queriesToTry) {
+                try {
+                    const recRes = await targetNode.search({ query, source: "ytmsearch" }, lastTrack.requester);
+                    if (recRes?.tracks?.length && recRes.loadType !== "empty" && recRes.loadType !== "error") {
+                        const candidate = recRes.tracks.find((t) => !historyIds.has(t.info.identifier) &&
+                            !restrictedTrackIds.has(t.info.identifier) &&
+                            !isSameSongOrJunk(t.info.title, player.queue.previous) &&
+                            (t.info.duration || 0) >= 60000 &&
+                            (t.info.duration || 0) <= 900000);
+                        if (candidate) {
+                            foundTrack = candidate;
+                            console.log(`[Smart Autoplay] Found fresh song: "${candidate.info.title}" by "${candidate.info.author}" via "${query}"`);
+                            break;
                         }
-                        return;
                     }
                 }
+                catch (e) {
+                    console.warn(`[Smart Autoplay] Search failed for query "${query}":`, e);
+                }
             }
-            catch (err) {
-                console.warn("[Smart Autoplay] Failed to find recommendation:", err);
+            if (foundTrack) {
+                foundTrack.requester = lastTrack.requester;
+                await player.queue.add(foundTrack);
+                await player.play();
+                if (channel) {
+                    channel.send({
+                        content: `📻 **Autoplay Radio:** Playing similar song **[${foundTrack.info.title}](${foundTrack.info.uri})** by **${foundTrack.info.author}**`,
+                    }).then((msg) => autoDeleteMessage(msg, 7000)).catch(() => { });
+                }
+                return;
             }
         }
         if (channel) {
