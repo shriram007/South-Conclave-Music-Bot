@@ -531,15 +531,20 @@ export async function validateVoiceGate(
     return { allowed: false, error: "❌ This action can only be used inside a server!" };
   }
 
-  const member = guild.members.cache.get(interaction.user.id) || await guild.members.fetch(interaction.user.id).catch(() => null);
-  if (!member?.voice?.channelId) {
+  // Fast in-memory resolution of user voice channel without network latency
+  const memberVoiceChannelId =
+    (interaction.member as any)?.voice?.channelId ||
+    guild.members.cache.get(interaction.user.id)?.voice?.channelId ||
+    (await guild.members.fetch(interaction.user.id).catch(() => null))?.voice?.channelId;
+
+  if (!memberVoiceChannelId) {
     return {
       allowed: false,
       error: "🔒 **Voice Gate Active:** You must be connected to a voice channel to use player controls!",
     };
   }
 
-  if (player.voiceChannelId && member.voice.channelId !== player.voiceChannelId) {
+  if (player.voiceChannelId && memberVoiceChannelId !== player.voiceChannelId) {
     return {
       allowed: false,
       error: `🔒 **Voice Gate Active:** You must be in <#${player.voiceChannelId}> to use player controls!`,

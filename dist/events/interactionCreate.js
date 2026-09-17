@@ -1,7 +1,7 @@
 import { EmbedBuilder, } from "discord.js";
 import { commandMap } from "../commands/index.js";
 import { fetchSongLyrics } from "../commands/lyrics.js";
-import { lavalink, validateVoiceGate } from "../lavalink/client.js";
+import { lavalink, updateActivePlayerMessage, validateVoiceGate } from "../lavalink/client.js";
 import { buildPlayerMessage } from "../lavalink/playerUI.js";
 import { EQ_PRESETS } from "../utils/equalizer.js";
 import { formatDuration } from "../utils/formatters.js";
@@ -19,6 +19,8 @@ export async function handleInteraction(interaction) {
                 await cmd.autocomplete(interaction);
             }
             catch (err) {
+                if (err?.code === 10062 || err?.rawError?.code === 10062)
+                    return;
                 console.error(`[Autocomplete Error] /${interaction.commandName}:`, err);
             }
         }
@@ -72,6 +74,13 @@ async function handleButtonInteraction(interaction) {
             ephemeral: true,
         });
     }
+    // Acknowledge Discord immediately to eliminate the 3-second timeout ("didn't respond in time")
+    if (interaction.customId === "player_queue" || interaction.customId === "player_lyrics") {
+        await interaction.deferReply({ ephemeral: true }).catch(() => { });
+    }
+    else {
+        await interaction.deferUpdate().catch(() => { });
+    }
     try {
         // If the player's node is currently disconnected, seamlessly failover to a healthy connected node
         if (!player.node || !player.node.connected) {
@@ -91,45 +100,53 @@ async function handleButtonInteraction(interaction) {
                     await player.pause();
                 }
                 console.log(`[Button: Pause/Resume] AFTER: paused=${player.paused} | Song: "${player.queue.current?.info.title}"`);
-                await interaction.update(buildPlayerMessage(player));
+                await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
                 break;
             }
             case "player_rewind_10": {
-                if (!player.queue.current)
-                    return interaction.reply({ content: "⚠️ No track currently playing.", ephemeral: true });
+                if (!player.queue.current) {
+                    await interaction.followUp({ content: "⚠️ No track currently playing.", ephemeral: true }).catch(() => { });
+                    break;
+                }
                 const currentPos = player.position || 0;
                 const newPos = Math.max(0, currentPos - 10000);
                 await player.seek(newPos);
-                await interaction.update(buildPlayerMessage(player));
+                await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
                 break;
             }
             case "player_forward_10": {
-                if (!player.queue.current)
-                    return interaction.reply({ content: "⚠️ No track currently playing.", ephemeral: true });
+                if (!player.queue.current) {
+                    await interaction.followUp({ content: "⚠️ No track currently playing.", ephemeral: true }).catch(() => { });
+                    break;
+                }
                 const currentPos = player.position || 0;
                 const maxDuration = player.queue.current.info.duration || Infinity;
                 const newPos = Math.min(maxDuration, currentPos + 10000);
                 await player.seek(newPos);
-                await interaction.update(buildPlayerMessage(player));
+                await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
                 break;
             }
             case "player_rewind_30": {
-                if (!player.queue.current)
-                    return interaction.reply({ content: "⚠️ No track currently playing.", ephemeral: true });
+                if (!player.queue.current) {
+                    await interaction.followUp({ content: "⚠️ No track currently playing.", ephemeral: true }).catch(() => { });
+                    break;
+                }
                 const currentPos = player.position || 0;
                 const newPos = Math.max(0, currentPos - 30000);
                 await player.seek(newPos);
-                await interaction.update(buildPlayerMessage(player));
+                await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
                 break;
             }
             case "player_forward_30": {
-                if (!player.queue.current)
-                    return interaction.reply({ content: "⚠️ No track currently playing.", ephemeral: true });
+                if (!player.queue.current) {
+                    await interaction.followUp({ content: "⚠️ No track currently playing.", ephemeral: true }).catch(() => { });
+                    break;
+                }
                 const currentPos = player.position || 0;
                 const maxDuration = player.queue.current.info.duration || Infinity;
                 const newPos = Math.min(maxDuration, currentPos + 30000);
                 await player.seek(newPos);
-                await interaction.update(buildPlayerMessage(player));
+                await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
                 break;
             }
             case "player_skip": {
@@ -140,7 +157,7 @@ async function handleButtonInteraction(interaction) {
                     else {
                         await player.stopPlaying();
                     }
-                    await interaction.reply({
+                    await interaction.followUp({
                         content: `⏭️ **${interaction.user.username}** skipped the track.`,
                         ephemeral: true,
                     }).catch(() => { });
@@ -155,16 +172,16 @@ async function handleButtonInteraction(interaction) {
                     const prev = player.queue.previous[0];
                     await player.queue.add(prev, 0);
                     await player.skip();
-                    await interaction.reply({
+                    await interaction.followUp({
                         content: `⏮️ **${interaction.user.username}** replayed previous track.`,
                         ephemeral: true,
-                    });
+                    }).catch(() => { });
                 }
                 else {
-                    await interaction.reply({
+                    await interaction.followUp({
                         content: "⚠️ No previous track in history.",
                         ephemeral: true,
-                    });
+                    }).catch(() => { });
                 }
                 break;
             }
@@ -174,11 +191,11 @@ async function handleButtonInteraction(interaction) {
                 player.setData("filter_preset_key", "reset");
                 player.setData("eq_preset", "Normal (Flat)");
                 await player.destroy("Stopped by user via button");
-                await interaction.update({
+                await interaction.editReply({
                     content: `⏹️ Playback stopped by **${interaction.user.username}**. Equalizer reset to **Normal (Flat)**.`,
                     embeds: [],
                     components: [],
-                });
+                }).catch(() => { });
                 break;
             }
             case "player_loop": {
@@ -188,7 +205,7 @@ async function handleButtonInteraction(interaction) {
                         ? "queue"
                         : "off";
                 await player.setRepeatMode(nextMode);
-                await interaction.update(buildPlayerMessage(player));
+                await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
                 const loopNotice = nextMode === "track"
                     ? "🔂 Looping **current track**."
                     : nextMode === "queue"
@@ -202,29 +219,30 @@ async function handleButtonInteraction(interaction) {
             }
             case "player_shuffle": {
                 if (player.queue.tracks.length < 2) {
-                    return interaction.reply({
+                    await interaction.followUp({
                         content: "⚠️ Not enough tracks to shuffle.",
                         ephemeral: true,
-                    });
+                    }).catch(() => { });
+                    break;
                 }
                 await player.queue.shuffle();
-                await interaction.update(buildPlayerMessage(player));
+                await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
                 await interaction.followUp({
                     content: `🔀 Queue shuffled by **${interaction.user.username}** (${player.queue.tracks.length} tracks).`,
                     ephemeral: true,
-                });
+                }).catch(() => { });
                 break;
             }
             case "player_voldown": {
                 const newVol = Math.max(0, player.volume - 10);
                 await player.setVolume(newVol);
-                await interaction.update(buildPlayerMessage(player));
+                await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
                 break;
             }
             case "player_volup": {
                 const newVol = Math.min(200, player.volume + 10);
                 await player.setVolume(newVol);
-                await interaction.update(buildPlayerMessage(player));
+                await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
                 break;
             }
             case "player_hifieq": {
@@ -234,22 +252,22 @@ async function handleButtonInteraction(interaction) {
                     player.setData("filter_preset_key", "reset");
                     player.setData("eq_preset", "Normal (Flat)");
                     await player.filterManager.clearEQ();
-                    await interaction.update(buildPlayerMessage(player));
+                    await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
                     await interaction.followUp({
                         content: "🔄 Equalizer reset to **Normal (Flat)**.",
                         ephemeral: true,
-                    });
+                    }).catch(() => { });
                 }
                 else {
                     player.setData("hifi_active", true);
                     player.setData("filter_preset_key", "hifi");
                     player.setData("eq_preset", "💎 Hi-Fi Studio");
                     await player.filterManager.setEQ(EQ_PRESETS.hifi);
-                    await interaction.update(buildPlayerMessage(player));
+                    await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
                     await interaction.followUp({
                         content: "💎 **Hi-Fi Studio Preset Activated!** (Audiophile dynamics & crisp highs)",
                         ephemeral: true,
-                    });
+                    }).catch(() => { });
                 }
                 break;
             }
@@ -257,7 +275,7 @@ async function handleButtonInteraction(interaction) {
                 const current = player.queue.current;
                 const upcoming = player.queue.tracks;
                 if (!current && upcoming.length === 0) {
-                    return interaction.reply({ content: "⚠️ The queue is currently empty.", ephemeral: true });
+                    return interaction.editReply({ content: "⚠️ The queue is currently empty." });
                 }
                 const embed = new EmbedBuilder()
                     .setColor(0x5865f2)
@@ -277,17 +295,16 @@ async function handleButtonInteraction(interaction) {
                 else {
                     embed.addFields([{ name: "Up Next", value: "No more tracks in queue. Add more with `/play`!" }]);
                 }
-                return interaction.reply({ embeds: [embed], ephemeral: true });
+                return interaction.editReply({ embeds: [embed] });
             }
             case "player_lyrics": {
                 const current = player.queue.current;
                 if (!current) {
-                    return interaction.reply({ content: "❌ No song is currently playing.", ephemeral: true });
+                    return interaction.editReply({ content: "❌ No song is currently playing." });
                 }
-                await interaction.deferReply({ ephemeral: true });
                 const res = await fetchSongLyrics(current.info.title, current.info.author, player, current);
                 if (!res.text) {
-                    return interaction.editReply(`❌ No lyrics found for **${current.info.title}**.`);
+                    return interaction.editReply({ content: `❌ No lyrics found for **${current.info.title}**.` });
                 }
                 let lyricsText = res.text;
                 if (lyricsText.length > 4000) {
@@ -303,11 +320,15 @@ async function handleButtonInteraction(interaction) {
                 return interaction.editReply({ embeds: [embed] });
             }
             default:
-                await interaction.reply({ content: "Unknown button interaction.", ephemeral: true });
+                await interaction.followUp({ content: "Unknown button interaction.", ephemeral: true }).catch(() => { });
                 break;
         }
     }
     catch (err) {
+        if (err?.code === 10062 || err?.rawError?.code === 10062) {
+            updateActivePlayerMessage(player, true).catch(() => { });
+            return;
+        }
         console.error("[Button Interaction Error]:", err);
         // If node was reconnecting or session dropped, gracefully failover
         if (err.message?.includes("Node Request") || err.message?.includes("not connected") || err.message?.includes("Socket")) {
@@ -315,17 +336,13 @@ async function handleButtonInteraction(interaction) {
             if (healthyNode) {
                 await player.changeNode(healthyNode, false).catch(() => { });
             }
-            if (!interaction.replied && !interaction.deferred) {
-                await interaction.reply({
-                    content: "🔄 Audio connection refreshed. Please press the button again!",
-                    ephemeral: true,
-                }).catch(() => { });
-            }
+            await interaction.followUp({
+                content: "🔄 Audio connection refreshed. Please press the button again!",
+                ephemeral: true,
+            }).catch(() => { });
             return;
         }
-        if (!interaction.replied && !interaction.deferred) {
-            await interaction.reply({ content: "⚠️ Action could not be completed. Please try again.", ephemeral: true }).catch(() => { });
-        }
+        await interaction.followUp({ content: "⚠️ Action could not be completed. Please try again.", ephemeral: true }).catch(() => { });
     }
 }
 async function handleSelectMenuInteraction(interaction) {
@@ -337,6 +354,8 @@ async function handleSelectMenuInteraction(interaction) {
     if (!gate.allowed) {
         return interaction.reply({ content: gate.error, ephemeral: true });
     }
+    // Acknowledge Discord immediately
+    await interaction.deferUpdate().catch(() => { });
     try {
         if (!player.node || !player.node.connected) {
             const healthyNode = Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected);
@@ -406,17 +425,19 @@ async function handleSelectMenuInteraction(interaction) {
                     presetLabel = "🔄 Normal (Flat Pure Audio)";
                     break;
             }
-            await interaction.update(buildPlayerMessage(player));
+            await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
             await interaction.followUp({
                 content: `🎛️ Applied sound filter: **${presetLabel}**`,
                 ephemeral: true,
-            });
+            }).catch(() => { });
         }
     }
     catch (err) {
-        console.error("[SelectMenu Interaction Error]:", err);
-        if (!interaction.replied && !interaction.deferred) {
-            await interaction.reply({ content: "⚠️ Filter could not be applied. Please try again.", ephemeral: true }).catch(() => { });
+        if (err?.code === 10062 || err?.rawError?.code === 10062) {
+            updateActivePlayerMessage(player, true).catch(() => { });
+            return;
         }
+        console.error("[SelectMenu Interaction Error]:", err);
+        await interaction.followUp({ content: "⚠️ Filter could not be applied. Please try again.", ephemeral: true }).catch(() => { });
     }
 }
