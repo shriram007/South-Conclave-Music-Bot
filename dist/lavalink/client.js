@@ -3,6 +3,7 @@ import { LavalinkManager } from "lavalink-client";
 import { buildPlayerMessage } from "./playerUI.js";
 import { getChannelBitrateInfo } from "../utils/formatters.js";
 import { is247Enabled } from "../utils/twentyFourSeven.js";
+import { autoDeleteMessage } from "../utils/cleanup.js";
 export let lavalink;
 export let discordClient;
 // Track active player messages so we can update or clean them up
@@ -157,17 +158,24 @@ export function initLavalink(client) {
                     const prevMsg = channel.messages.cache.get(prevMessageId) || (await channel.messages.fetch(prevMessageId).catch(() => null));
                     if (prevMsg) {
                         await prevMsg.edit({ embeds: [queueFinishedEmbed], components: [] });
+                        autoDeleteMessage(prevMsg, 20000);
                     }
                     else {
-                        await channel.send({ embeds: [queueFinishedEmbed] });
+                        const sent = await channel.send({ embeds: [queueFinishedEmbed] });
+                        if (sent)
+                            autoDeleteMessage(sent, 20000);
                     }
                 }
                 catch {
-                    await channel.send({ embeds: [queueFinishedEmbed] }).catch(() => { });
+                    const sent = await channel.send({ embeds: [queueFinishedEmbed] }).catch(() => null);
+                    if (sent)
+                        autoDeleteMessage(sent, 20000);
                 }
             }
             else {
-                await channel.send({ embeds: [queueFinishedEmbed] }).catch(() => { });
+                const sent = await channel.send({ embeds: [queueFinishedEmbed] }).catch(() => null);
+                if (sent)
+                    autoDeleteMessage(sent, 20000);
             }
             activePlayerMessages.delete(player.guildId);
             player.setData("active_message_id", null);

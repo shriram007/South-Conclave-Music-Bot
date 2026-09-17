@@ -8,6 +8,7 @@ import { qualityCommand } from "./quality.js";
 import { helpCommand } from "./help.js";
 import { twentyFourSevenCommand } from "./twentyFourSeven.js";
 import { lyricsCommand } from "./lyrics.js";
+import { cleanCommand } from "./clean.js";
 export const commands = [
     playCommand,
     pauseCommand,
@@ -27,6 +28,7 @@ export const commands = [
     filterCommand,
     qualityCommand,
     helpCommand,
+    cleanCommand,
     // prefixCommand, // Hidden for now (requires Privileged Message Content Intent)
     twentyFourSevenCommand,
 ];

@@ -1,6 +1,7 @@
 import { SlashCommandBuilder, } from "discord.js";
 import { lavalink, updateActivePlayerMessage, validateVoiceGate } from "../lavalink/client.js";
 import { EQ_PRESETS } from "../utils/equalizer.js";
+import { autoDeleteReply } from "../utils/cleanup.js";
 export const filterCommand = {
     data: new SlashCommandBuilder()
         .setName("filter")
@@ -26,66 +27,71 @@ export const filterCommand = {
             await player.filterManager.resetFilters();
             await player.filterManager.clearEQ();
             player.setData("filter_preset_key", preset);
+            let replyText = "🔄 **Equalizer Reset!** Streaming flat, pure master audio.";
             switch (preset) {
                 case "hifi":
                     player.setData("hifi_active", true);
                     player.setData("eq_preset", "💎 Hi-Fi Studio");
                     await player.filterManager.setEQ(EQ_PRESETS.hifi);
-                    await updateActivePlayerMessage(player);
-                    return interaction.editReply("💎 **Hi-Fi Studio Applied!** Enhanced dynamics and crystal sparkle.");
+                    replyText = "💎 **Hi-Fi Studio Applied!** Enhanced dynamics and crystal sparkle.";
+                    break;
                 case "bassboost":
                     player.setData("hifi_active", false);
                     player.setData("eq_preset", "🔊 Bass Boost");
                     await player.filterManager.setEQ(EQ_PRESETS.bassboost);
-                    await updateActivePlayerMessage(player);
-                    return interaction.editReply("🔊 **Bass Boost Applied!** Deep, punchy sub-bass active.");
+                    replyText = "🔊 **Bass Boost Applied!** Deep, punchy sub-bass active.";
+                    break;
                 case "turbo":
                     player.setData("hifi_active", false);
                     player.setData("eq_preset", "🏎️ Turbo Rush");
                     await player.filterManager.setSpeed(1.35);
-                    await updateActivePlayerMessage(player);
-                    return interaction.editReply("🏎️ **Turbo Rush Applied!** 1.35x high-energy tempo boost.");
+                    replyText = "🏎️ **Turbo Rush Applied!** 1.35x high-energy tempo boost.";
+                    break;
                 case "treble":
                     player.setData("hifi_active", false);
                     player.setData("eq_preset", "🎤 Treble Boost");
                     await player.filterManager.setEQ(EQ_PRESETS.treble);
-                    await updateActivePlayerMessage(player);
-                    return interaction.editReply("🎤 **Treble Boost Applied!** Vocals and acoustic detail emphasized.");
+                    replyText = "🎤 **Treble Boost Applied!** Vocals and acoustic detail emphasized.";
+                    break;
                 case "8d":
                     player.setData("hifi_active", false);
                     player.setData("eq_preset", "🎧 8D Audio");
                     await player.filterManager.toggleRotation(0.35);
-                    await updateActivePlayerMessage(player);
-                    return interaction.editReply("🎧 **8D Audio Active!** Rotating 360° binaural effect — wear headphones!");
+                    replyText = "🎧 **8D Audio Active!** Rotating 360° binaural effect — wear headphones!";
+                    break;
                 case "nightcore":
                     player.setData("hifi_active", false);
                     player.setData("eq_preset", "⚡ Nightcore");
                     await player.filterManager.toggleNightcore();
-                    await updateActivePlayerMessage(player);
-                    return interaction.editReply("⚡ **Nightcore Active!** Speed and pitch boosted.");
+                    replyText = "⚡ **Nightcore Active!** Speed and pitch boosted.";
+                    break;
                 case "vaporwave":
                     player.setData("hifi_active", false);
                     player.setData("eq_preset", "🌊 Vaporwave");
                     await player.filterManager.toggleVaporwave();
-                    await updateActivePlayerMessage(player);
-                    return interaction.editReply("🌊 **Vaporwave Active!** Slowed, dreamy aesthetic tone.");
+                    replyText = "🌊 **Vaporwave Active!** Slowed, dreamy aesthetic tone.";
+                    break;
                 case "karaoke":
                     player.setData("hifi_active", false);
                     player.setData("eq_preset", "🎤 Karaoke");
                     await player.filterManager.toggleKaraoke(1, 1, 220, 100);
-                    await updateActivePlayerMessage(player);
-                    return interaction.editReply("🎤 **Karaoke Mode Active!** Center lead vocals dampened for sing-along.");
+                    replyText = "🎤 **Karaoke Mode Active!** Center lead vocals dampened for sing-along.";
+                    break;
                 case "reset":
                 default:
                     player.setData("hifi_active", false);
                     player.setData("eq_preset", "Normal (Flat)");
-                    await updateActivePlayerMessage(player);
-                    return interaction.editReply("🔄 **Equalizer Reset!** Streaming flat, pure master audio.");
+                    replyText = "🔄 **Equalizer Reset!** Streaming flat, pure master audio.";
+                    break;
             }
+            await updateActivePlayerMessage(player);
+            await interaction.editReply(replyText);
+            autoDeleteReply(interaction, 5000);
         }
         catch (err) {
             console.error("[Filter Command] Error:", err);
-            return interaction.editReply(`⚠️ Failed to apply filter: ${err.message || "Unknown error"}`);
+            await interaction.editReply(`⚠️ Failed to apply filter: ${err.message || "Unknown error"}`);
+            autoDeleteReply(interaction, 6000);
         }
     },
 };

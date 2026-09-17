@@ -20,6 +20,7 @@ import { helpCommand } from "./help.js";
 import { prefixCommand } from "./prefix.js";
 import { twentyFourSevenCommand } from "./twentyFourSeven.js";
 import { lyricsCommand } from "./lyrics.js";
+import { cleanCommand } from "./clean.js";
 
 export const commands = [
   playCommand,
@@ -40,6 +41,7 @@ export const commands = [
   filterCommand,
   qualityCommand,
   helpCommand,
+  cleanCommand,
   // prefixCommand, // Hidden for now (requires Privileged Message Content Intent)
   twentyFourSevenCommand,
 ];
