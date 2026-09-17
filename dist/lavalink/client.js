@@ -12,6 +12,13 @@ export function initLavalink(client) {
     lavalink = new LavalinkManager({
         nodes: [
             {
+                authorization: "free",
+                host: "lavalink-v4.triniumhost.com",
+                port: 443,
+                secure: true,
+                id: "Trinium-FastNode",
+            },
+            {
                 authorization: config.lavalink.password,
                 host: config.lavalink.host,
                 port: config.lavalink.port,
