@@ -27,6 +27,11 @@ export const filterCommand = {
           { name: "🚪 Next Room / Party in the Hallway (Muffled)", value: "muffled" },
           { name: "☎️ 1920s Old Radio / Telephone", value: "radio" },
           { name: "🤿 Underwater (Submerged Bubbly Tone)", value: "underwater" },
+          { name: "🎤 Karaoke (Vocal Reducer / Sing-Along)", value: "karaoke" },
+          { name: "🤖 Robot / Synth (Metallic Ring Modulator)", value: "robot" },
+          { name: "🌀 Drunk / Dizzy (Psychedelic Pitch Wobble)", value: "wobbly" },
+          { name: "📢 Megaphone (Loud Street PA Speaker)", value: "megaphone" },
+          { name: "🏎️ Turbo Rush (1.35x High Energy Tempo)", value: "turbo" },
           { name: "🔄 Reset to Flat / Pure Audio", value: "reset" }
         )
     ),
@@ -138,6 +143,41 @@ export const filterCommand = {
           await player.filterManager.toggleTremolo(4.0, 0.6);
           await updateActivePlayerMessage(player);
           return interaction.editReply("🤿 **Underwater Mode Active!** Bubbly, submerged acoustic simulation.");
+
+        case "karaoke":
+          player.setData("hifi_active", false);
+          player.setData("eq_preset", "🎤 Karaoke");
+          await player.filterManager.toggleKaraoke(1, 1, 220, 100);
+          await updateActivePlayerMessage(player);
+          return interaction.editReply("🎤 **Karaoke Mode Active!** Lead vocals dampened for sing-along.");
+
+        case "robot":
+          player.setData("hifi_active", false);
+          player.setData("eq_preset", "🤖 Robot Synth");
+          await player.filterManager.toggleTremolo(14.0, 0.9);
+          await updateActivePlayerMessage(player);
+          return interaction.editReply("🤖 **Robot Synth Active!** Fast metallic ring modulation.");
+
+        case "wobbly":
+          player.setData("hifi_active", false);
+          player.setData("eq_preset", "🌀 Drunk / Dizzy");
+          await player.filterManager.toggleVibrato(4.0, 0.75);
+          await updateActivePlayerMessage(player);
+          return interaction.editReply("🌀 **Drunk / Dizzy Mode Active!** Psychedelic pitch oscillation.");
+
+        case "megaphone":
+          player.setData("hifi_active", false);
+          player.setData("eq_preset", "📢 Megaphone");
+          await player.filterManager.setEQ(EQ_PRESETS.megaphone);
+          await updateActivePlayerMessage(player);
+          return interaction.editReply("📢 **Megaphone Active!** Public address horn speaker effect.");
+
+        case "turbo":
+          player.setData("hifi_active", false);
+          player.setData("eq_preset", "🏎️ Turbo Speed");
+          await player.filterManager.setSpeed(1.35);
+          await updateActivePlayerMessage(player);
+          return interaction.editReply("🏎️ **Turbo Speed Active!** 1.35x high-tempo rush.");
 
         case "reset":
         default:
