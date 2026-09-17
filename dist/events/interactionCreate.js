@@ -157,10 +157,6 @@ async function handleButtonInteraction(interaction) {
                     else {
                         await player.stopPlaying();
                     }
-                    await interaction.followUp({
-                        content: `⏭️ **${interaction.user.username}** skipped the track.`,
-                        ephemeral: true,
-                    }).catch(() => { });
                 }
                 catch {
                     await player.stopPlaying().catch(() => { });
@@ -172,10 +168,6 @@ async function handleButtonInteraction(interaction) {
                     const prev = player.queue.previous[0];
                     await player.queue.add(prev, 0);
                     await player.skip();
-                    await interaction.followUp({
-                        content: `⏮️ **${interaction.user.username}** replayed previous track.`,
-                        ephemeral: true,
-                    }).catch(() => { });
                 }
                 else {
                     await interaction.followUp({
@@ -206,15 +198,6 @@ async function handleButtonInteraction(interaction) {
                         : "off";
                 await player.setRepeatMode(nextMode);
                 await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
-                const loopNotice = nextMode === "track"
-                    ? "🔂 Looping **current track**."
-                    : nextMode === "queue"
-                        ? "🔁 Looping **entire queue**."
-                        : "➡️ Loop **disabled**.";
-                await interaction.followUp({
-                    content: loopNotice,
-                    ephemeral: true,
-                }).catch(() => { });
                 break;
             }
             case "player_shuffle": {
@@ -227,10 +210,6 @@ async function handleButtonInteraction(interaction) {
                 }
                 await player.queue.shuffle();
                 await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
-                await interaction.followUp({
-                    content: `🔀 Queue shuffled by **${interaction.user.username}** (${player.queue.tracks.length} tracks).`,
-                    ephemeral: true,
-                }).catch(() => { });
                 break;
             }
             case "player_voldown": {
@@ -253,10 +232,6 @@ async function handleButtonInteraction(interaction) {
                     player.setData("eq_preset", "Normal (Flat)");
                     await player.filterManager.clearEQ();
                     await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
-                    await interaction.followUp({
-                        content: "🔄 Equalizer reset to **Normal (Flat)**.",
-                        ephemeral: true,
-                    }).catch(() => { });
                 }
                 else {
                     player.setData("hifi_active", true);
@@ -264,10 +239,6 @@ async function handleButtonInteraction(interaction) {
                     player.setData("eq_preset", "💎 Hi-Fi Studio");
                     await player.filterManager.setEQ(EQ_PRESETS.hifi);
                     await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
-                    await interaction.followUp({
-                        content: "💎 **Hi-Fi Studio Preset Activated!** (Audiophile dynamics & crisp highs)",
-                        ephemeral: true,
-                    }).catch(() => { });
                 }
                 break;
             }
@@ -426,10 +397,6 @@ async function handleSelectMenuInteraction(interaction) {
                     break;
             }
             await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
-            await interaction.followUp({
-                content: `🎛️ Applied sound filter: **${presetLabel}**`,
-                ephemeral: true,
-            }).catch(() => { });
         }
     }
     catch (err) {

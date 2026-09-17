@@ -172,10 +172,6 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
           } else {
             await player.stopPlaying();
           }
-          await interaction.followUp({
-            content: `⏭️ **${interaction.user.username}** skipped the track.`,
-            ephemeral: true,
-          }).catch(() => {});
         } catch {
           await player.stopPlaying().catch(() => {});
         }
@@ -187,10 +183,6 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
           const prev = player.queue.previous[0];
           await player.queue.add(prev, 0);
           await player.skip();
-          await interaction.followUp({
-            content: `⏮️ **${interaction.user.username}** replayed previous track.`,
-            ephemeral: true,
-          }).catch(() => {});
         } else {
           await interaction.followUp({
             content: "⚠️ No previous track in history.",
@@ -224,18 +216,6 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
 
         await player.setRepeatMode(nextMode);
         await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
-
-        const loopNotice =
-          nextMode === "track"
-            ? "🔂 Looping **current track**."
-            : nextMode === "queue"
-            ? "🔁 Looping **entire queue**."
-            : "➡️ Loop **disabled**.";
-
-        await interaction.followUp({
-          content: loopNotice,
-          ephemeral: true,
-        }).catch(() => {});
         break;
       }
 
@@ -249,10 +229,6 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
         }
         await player.queue.shuffle();
         await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
-        await interaction.followUp({
-          content: `🔀 Queue shuffled by **${interaction.user.username}** (${player.queue.tracks.length} tracks).`,
-          ephemeral: true,
-        }).catch(() => {});
         break;
       }
 
@@ -278,20 +254,12 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
           player.setData("eq_preset", "Normal (Flat)");
           await player.filterManager.clearEQ();
           await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
-          await interaction.followUp({
-            content: "🔄 Equalizer reset to **Normal (Flat)**.",
-            ephemeral: true,
-          }).catch(() => {});
         } else {
           player.setData("hifi_active", true);
           player.setData("filter_preset_key", "hifi");
           player.setData("eq_preset", "💎 Hi-Fi Studio");
           await player.filterManager.setEQ(EQ_PRESETS.hifi);
           await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
-          await interaction.followUp({
-            content: "💎 **Hi-Fi Studio Preset Activated!** (Audiophile dynamics & crisp highs)",
-            ephemeral: true,
-          }).catch(() => {});
         }
         break;
       }
@@ -479,10 +447,6 @@ async function handleSelectMenuInteraction(interaction: StringSelectMenuInteract
       }
 
       await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
-      await interaction.followUp({
-        content: `🎛️ Applied sound filter: **${presetLabel}**`,
-        ephemeral: true,
-      }).catch(() => {});
     }
   } catch (err: any) {
     if (err?.code === 10062 || err?.rawError?.code === 10062) {
