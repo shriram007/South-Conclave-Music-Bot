@@ -110,17 +110,27 @@ export const playCommand = {
         console.log(`[Play Command] User: "${interaction.user.tag}" (${interaction.user.id}) in "${interaction.guild?.name}" | Query: "${rawQuery}"`);
         try {
             const { query, isUrl } = await resolveTrackQuery(rawQuery);
-            let res = await player.search({
-                query: query,
-                source: isUrl ? undefined : "ytmsearch", // Default to YouTube Music HQ 256k
-            }, interaction.user);
-            // Fallback to standard YouTube if ytmsearch has no tracks or error
-            if ((!res || !res.tracks || res.tracks.length === 0 || res.loadType === "empty" || res.loadType === "error") && !isUrl) {
-                console.log(`[Play Command] ytmsearch returned no tracks for "${query}". Falling back to ytsearch...`);
+            let res;
+            try {
                 res = await player.search({
                     query: query,
-                    source: "ytsearch",
+                    source: isUrl ? undefined : "ytmsearch", // Default to YouTube Music HQ 256k
                 }, interaction.user);
+            }
+            catch (e) {
+                console.warn(`[Play Command] ytmsearch failed for "${query}", trying fallback...`);
+            }
+            // Fallback to standard YouTube if ytmsearch has no tracks or threw an error
+            if ((!res || !res.tracks || res.tracks.length === 0 || res.loadType === "empty" || res.loadType === "error") && !isUrl) {
+                try {
+                    res = await player.search({
+                        query: query,
+                        source: "ytsearch",
+                    }, interaction.user);
+                }
+                catch (e) {
+                    console.warn(`[Play Command] ytsearch fallback failed for "${query}"`);
+                }
             }
             // Fallback for Spotify URL if Lavalink failed to load it directly
             if ((!res || !res.tracks || res.tracks.length === 0 || res.loadType === "empty" || res.loadType === "error") && isUrl && /^https?:\/\/open\.spotify\.com\//i.test(query)) {
