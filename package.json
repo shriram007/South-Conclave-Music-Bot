@@ -1,0 +1,26 @@
+{
+  "name": "discord-music-bot",
+  "version": "1.0.0",
+  "description": "High-fidelity Discord music bot with 300+ kbps playback, Deezer Hi-Fi, Spotify, and Apple Music support",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "setup:lavalink": "node scripts/download-lavalink.js"
+  },
+  "keywords": ["discord", "music-bot", "hifi", "deezer", "spotify", "apple-music", "lavalink"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.17.3",
+    "dotenv": "^16.4.7",
+    "lavalink-client": "^2.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.9",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}

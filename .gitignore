@@ -1,0 +1,38 @@
+# Environment and sensitive keys (CRITICAL)
+.env
+.env.local
+.env.*.local
+*.env
+
+# Dependencies
+node_modules/
+
+# TypeScript Build Output
+dist/
+
+# Lavalink Server Binary (Large 75MB+ binary)
+*.jar
+lavalink/Lavalink.jar
+lavalink/logs/
+lavalink/plugins/
+
+# OS and Editor metadata
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Runtime Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+
+# Local Runtime Data
+data/*.json
+!data/.gitkeep

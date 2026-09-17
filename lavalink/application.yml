@@ -1,0 +1,98 @@
+server:
+  port: 2333
+  address: 0.0.0.0
+  http2:
+    enabled: true
+
+lavalink:
+  plugins:
+    # LavaSrc Plugin for Spotify and Apple Music
+    - dependency: "com.github.topi314.lavasrc:lavasrc-plugin:4.4.1"
+      repository: "https://maven.lavalink.dev/releases"
+    # Lavalink v4 YouTube Plugin (Supports YouTube Music 256k & Web)
+    - dependency: "dev.arbjerg.lavalink.libraries.v4:lavalink-plugins-youtube:1.11.4"
+      repository: "https://maven.lavalink.dev/releases"
+    # JioSaavn Plugin (Pristine 320 kbps Indian & Global audio streaming)
+    - dependency: "com.github.bongo-devs:jiosaavn-plugin:0.1.7"
+      repository: "https://jitpack.io"
+
+  server:
+    password: "youshallnotpass"
+    sources:
+      youtube: false # handled by youtube-plugin
+      bandcamp: true
+      soundcloud: true
+      twitch: true
+      vimeo: true
+      http: true
+      local: false
+
+    # Studio-Grade Audio Pipeline Settings (Targeting 300+ kbps Opus)
+    bufferDurationMs: 400
+    frameBufferDurationMs: 5000
+    opusEncodingQuality: 10      # Max Opus quality (0-10, 10 is highest fidelity)
+    resamplingQuality: HIGH       # Highest quality sample rate converter to 48kHz
+    trackStuckThresholdMs: 10000
+    useSeekGhosting: true
+    youtubePlaylistLoadLimit: 100
+    playerUpdateInterval: 5
+
+    filters:
+      volume: true
+      equalizer: true
+      karaoke: true
+      timescale: true
+      tremolo: true
+      vibrato: true
+      distortion: true
+      rotation: true
+      channelMix: true
+      lowPass: true
+
+plugins:
+  youtube:
+    enabled: true
+    allowSearch: true
+    allowDirectVideoIds: true
+    allowDirectPlaylistIds: true
+    clients:
+      - MUSIC                    # YouTube Music 256k AAC HQ
+      - WEB
+      - ANDROID
+
+  lavasrc:
+    providers:
+      # Provider fallback order: YouTube Music HQ first, then ISRC search
+      - "ytmsearch:\"%ISRC%\""
+      - "ytmsearch:%QUERY%"
+      - "ytsearch:\"%ISRC%\""
+      - "ytsearch:%QUERY%"
+    sources:
+      spotify: true
+      applemusic: true
+      deezer: false              # Disabled as Deezer is unavailable in India
+      yandexmusic: false
+      flowerytts: false
+      youtube: true
+
+    # Spotify API (Used to resolve Spotify tracks, playlists, and albums)
+    spotify:
+      clientId: "${SPOTIFY_CLIENT_ID:}"
+      clientSecret: "${SPOTIFY_CLIENT_SECRET:}"
+      countryCode: "IN"          # India region for Spotify
+      playlistLoadLimit: 100
+      albumLoadLimit: 50
+
+    # Apple Music (Used to resolve Apple Music songs, playlists, and albums)
+    applemusic:
+      countryCode: "IN"          # India region for Apple Music
+      mediaAPIToken: ""
+      playlistLoadLimit: 100
+      albumLoadLimit: 50
+
+logging:
+  file:
+    path: ./logs/lavalink.log
+  level:
+    root: INFO
+    lavalink: INFO
