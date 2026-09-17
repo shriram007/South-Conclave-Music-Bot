@@ -165,22 +165,26 @@ export function initLavalink(client) {
                 : "✨ All tracks finished playing. Use `/play <song>` to start jamming again!")
                 .setFooter({ text: "💎 South Conclave Audiophile Engine" })
                 .setTimestamp();
+            let finishedMsg = null;
             if (prevMessageId) {
                 try {
                     const prevMsg = channel.messages.cache.get(prevMessageId) || (await channel.messages.fetch(prevMessageId).catch(() => null));
                     if (prevMsg) {
-                        await prevMsg.edit({ embeds: [queueFinishedEmbed], components: [] });
+                        finishedMsg = await prevMsg.edit({ embeds: [queueFinishedEmbed], components: [] });
                     }
                     else {
-                        await channel.send({ embeds: [queueFinishedEmbed] });
+                        finishedMsg = await channel.send({ embeds: [queueFinishedEmbed] });
                     }
                 }
                 catch {
-                    await channel.send({ embeds: [queueFinishedEmbed] }).catch(() => null);
+                    finishedMsg = await channel.send({ embeds: [queueFinishedEmbed] }).catch(() => null);
                 }
             }
             else {
-                await channel.send({ embeds: [queueFinishedEmbed] }).catch(() => null);
+                finishedMsg = await channel.send({ embeds: [queueFinishedEmbed] }).catch(() => null);
+            }
+            if (finishedMsg) {
+                autoDeleteMessage(finishedMsg, 20000);
             }
             activePlayerMessages.delete(player.guildId);
             player.setData("active_message_id", null);
