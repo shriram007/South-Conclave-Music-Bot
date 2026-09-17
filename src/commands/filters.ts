@@ -4,7 +4,6 @@ import {
 } from "discord.js";
 import { lavalink, updateActivePlayerMessage, validateVoiceGate } from "../lavalink/client.js";
 import { EQ_PRESETS } from "../utils/equalizer.js";
-import { autoDeleteReply } from "../utils/cleanup.js";
 
 export const filterCommand = {
   data: new SlashCommandBuilder()
@@ -117,11 +116,9 @@ export const filterCommand = {
 
       await updateActivePlayerMessage(player);
       await interaction.editReply(replyText);
-      autoDeleteReply(interaction, 5000);
     } catch (err: any) {
       console.error("[Filter Command] Error:", err);
       await interaction.editReply(`⚠️ Failed to apply filter: ${err.message || "Unknown error"}`);
-      autoDeleteReply(interaction, 6000);
     }
   },
 };

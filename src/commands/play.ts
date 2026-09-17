@@ -6,7 +6,6 @@ import {
 } from "discord.js";
 import { getOrCreatePlayer, lavalink, updateActivePlayerMessage } from "../lavalink/client.js";
 import { formatDuration, getSourceInfo } from "../utils/formatters.js";
-import { autoDeleteReply } from "../utils/cleanup.js";
 
 async function resolveSpotifyTrack(url: string): Promise<string | null> {
   try {
@@ -247,13 +246,11 @@ export const playCommand = {
 
       if (!res || !res.tracks || res.tracks.length === 0 || res.loadType === "empty") {
         await interaction.editReply(`❌ No tracks found for: \`${rawQuery}\``);
-        autoDeleteReply(interaction, 7000);
         return;
       }
 
       if (res.loadType === "error") {
         await interaction.editReply(`⚠️ An error occurred while searching: ${res.exception?.message || "Unknown error"}`);
-        autoDeleteReply(interaction, 7000);
         return;
       }
 
@@ -292,7 +289,6 @@ export const playCommand = {
         }
 
         await interaction.editReply({ embeds: [embed] });
-        autoDeleteReply(interaction, 8000);
         return;
       }
 
@@ -313,7 +309,6 @@ export const playCommand = {
       if (!player.playing && !player.paused) {
         await player.play();
         await interaction.editReply(`▶️ Playing **[${track.info.title}](${track.info.uri})** by **${track.info.author}**`);
-        autoDeleteReply(interaction, 6000);
       } else {
         await updateActivePlayerMessage(player);
         const source = getSourceInfo(track.info.sourceName);
@@ -359,12 +354,10 @@ export const playCommand = {
         }
 
         await interaction.editReply({ embeds: [embed] });
-        autoDeleteReply(interaction, 7000);
       }
     } catch (err: any) {
       console.error("[Play Command] Search error:", err);
       await interaction.editReply(`⚠️ Failed to play track: ${err.message || "Unknown error"}`);
-      autoDeleteReply(interaction, 8000);
     }
   },
 };

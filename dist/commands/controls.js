@@ -1,7 +1,6 @@
 import { SlashCommandBuilder, } from "discord.js";
 import { activePlayerMessages, discordClient, lavalink, updateActivePlayerMessage, validateVoiceGate } from "../lavalink/client.js";
 import { formatDuration } from "../utils/formatters.js";
-import { autoDeleteReply } from "../utils/cleanup.js";
 async function getPlayerWithGate(interaction) {
     const player = lavalink.getPlayer(interaction.guildId);
     if (!player || (!player.queue.current && player.queue.tracks.length === 0)) {
@@ -27,7 +26,6 @@ export const pauseCommand = {
         await player.pause();
         await updateActivePlayerMessage(player, true);
         await interaction.reply("⏸️ Playback paused.");
-        autoDeleteReply(interaction, 5000);
     },
 };
 export const resumeCommand = {
@@ -42,7 +40,6 @@ export const resumeCommand = {
         await player.resume();
         await updateActivePlayerMessage(player, true);
         await interaction.reply("▶️ Playback resumed.");
-        autoDeleteReply(interaction, 5000);
     },
 };
 export const skipCommand = {
@@ -62,13 +59,11 @@ export const skipCommand = {
             }
             await updateActivePlayerMessage(player);
             await interaction.editReply(`⏭️ Skipped **${currentTitle}**`);
-            autoDeleteReply(interaction, 5000);
         }
         catch {
             await player.stopPlaying().catch(() => { });
             await updateActivePlayerMessage(player);
             await interaction.editReply(`⏭️ Skipped **${currentTitle}**`);
-            autoDeleteReply(interaction, 5000);
         }
     },
 };
@@ -86,7 +81,6 @@ export const previousCommand = {
         await player.skip();
         await updateActivePlayerMessage(player);
         await interaction.reply(`⏮️ Playing previous track: **${prevTrack.info.title}**`);
-        autoDeleteReply(interaction, 5000);
     },
 };
 export const stopCommand = {
@@ -105,13 +99,22 @@ export const stopCommand = {
         if (prevMsgId && player.textChannelId) {
             const chan = discordClient?.channels.cache.get(player.textChannelId);
             if (chan) {
-                chan.messages.delete(prevMsgId).catch(() => { });
+                try {
+                    const prevMsg = chan.messages.cache.get(prevMsgId) || (await chan.messages.fetch(prevMsgId).catch(() => null));
+                    if (prevMsg) {
+                        await prevMsg.edit({
+                            content: `⏹️ Playback stopped by **${interaction.user.username}**. Equalizer reset to **Normal (Flat)**.`,
+                            embeds: [],
+                            components: [],
+                        }).catch(() => { });
+                    }
+                }
+                catch { }
             }
         }
         activePlayerMessages.delete(interaction.guildId);
         await player.destroy("User executed stop command");
         await interaction.reply("⏹️ Stopped playback and disconnected from voice. Equalizer reset to **Normal (Flat)**.");
-        autoDeleteReply(interaction, 6000);
     },
 };
 export const loopCommand = {
@@ -136,7 +139,6 @@ export const loopCommand = {
             queue: "🔁 Looping entire queue",
         };
         await interaction.reply(modeLabels[mode] || `Loop mode set to ${mode}`);
-        autoDeleteReply(interaction, 5000);
     },
 };
 export const shuffleCommand = {
@@ -151,7 +153,6 @@ export const shuffleCommand = {
         await player.queue.shuffle();
         await updateActivePlayerMessage(player);
         await interaction.reply(`🔀 Shuffled **${player.queue.tracks.length}** tracks in the queue.`);
-        autoDeleteReply(interaction, 5000);
     },
 };
 export const seekCommand = {
@@ -194,7 +195,6 @@ export const seekCommand = {
         await player.seek(targetMs);
         await updateActivePlayerMessage(player, true);
         await interaction.reply(`⏩ Jumped to **${formatDuration(targetMs)}**`);
-        autoDeleteReply(interaction, 5000);
     },
 };
 function parseIndicesToRemove(trackInput, toInput, queueLength = 0) {
@@ -295,13 +295,11 @@ export const removeCommand = {
         await updateActivePlayerMessage(player);
         if (indices.length === 1) {
             await interaction.reply(`🗑️ Removed ${removedNames[0]} from the queue.`);
-            autoDeleteReply(interaction, 6000);
             return;
         }
         const preview = removedNames.slice(0, 4).join("\n");
         const extra = removedNames.length > 4 ? `\n...and ${removedNames.length - 4} more` : "";
         await interaction.reply(`🗑️ Removed **${indices.length}** tracks from the queue:\n${preview}${extra}`);
-        autoDeleteReply(interaction, 6000);
     },
 };
 export const clearCommand = {
@@ -322,6 +320,5 @@ export const clearCommand = {
         await player.queue.splice(0, count);
         await updateActivePlayerMessage(player);
         await interaction.reply(`🧹 Cleared **${count}** song(s) from the queue.`);
-        autoDeleteReply(interaction, 5000);
     },
 };

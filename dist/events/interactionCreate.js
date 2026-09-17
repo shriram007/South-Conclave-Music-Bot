@@ -181,6 +181,15 @@ async function handleButtonInteraction(interaction) {
                         : "off";
                 await player.setRepeatMode(nextMode);
                 await interaction.update(buildPlayerMessage(player));
+                const loopNotice = nextMode === "track"
+                    ? "🔂 Looping **current track**."
+                    : nextMode === "queue"
+                        ? "🔁 Looping **entire queue**."
+                        : "➡️ Loop **disabled**.";
+                await interaction.followUp({
+                    content: loopNotice,
+                    ephemeral: true,
+                }).catch(() => { });
                 break;
             }
             case "player_shuffle": {

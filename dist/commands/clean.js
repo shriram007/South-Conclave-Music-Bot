@@ -1,5 +1,5 @@
 import { SlashCommandBuilder, } from "discord.js";
-import { activePlayerMessages } from "../lavalink/client.js";
+import { activePlayerMessages, lavalink } from "../lavalink/client.js";
 export const cleanCommand = {
     data: new SlashCommandBuilder()
         .setName("clean")
@@ -21,11 +21,43 @@ export const cleanCommand = {
             const messages = await channel.messages.fetch({ limit: amount });
             const botId = interaction.client.user.id;
             const activeMessageId = activePlayerMessages.get(interaction.guildId || "");
-            // Find all bot messages in this channel EXCEPT the active live player embed
+            const player = lavalink.getPlayer(interaction.guildId || "");
+            const isMusicActive = Boolean(player && (player.playing || player.paused || player.queue.current));
+            // Find bot messages to clean up while strictly preserving music player cards
             const messagesToDelete = messages.filter((m) => {
-                if (m.id === activeMessageId)
-                    return false; // Preserve currently active player
-                return m.author.id === botId;
+                if (m.author.id !== botId)
+                    return false;
+                // 1. NEVER delete the active player card
+                if (activeMessageId && m.id === activeMessageId)
+                    return false;
+                if (player && player.getData("active_message_id") === m.id)
+                    return false;
+                // 2. NEVER delete interactive components (player cards, buttons, select menus)
+                if (m.components && m.components.length > 0)
+                    return false;
+                // 3. NEVER delete player embeds or currently playing song cards
+                const isPlayerOrMusicEmbed = m.embeds.some((e) => {
+                    const author = e.author?.name?.toLowerCase() || "";
+                    const title = e.title?.toLowerCase() || "";
+                    const desc = e.description?.toLowerCase() || "";
+                    const footer = e.footer?.text?.toLowerCase() || "";
+                    return (author.includes("playing") ||
+                        author.includes("paused") ||
+                        title.includes("playing") ||
+                        title.includes("added to queue") ||
+                        desc.includes("added by") ||
+                        footer.includes("south conclave") ||
+                        footer.includes("interactive player"));
+                });
+                if (isPlayerOrMusicEmbed)
+                    return false;
+                // 4. While music is actively playing, preserve recently sent music confirmation cards
+                if (isMusicActive) {
+                    const ageMs = Date.now() - m.createdTimestamp;
+                    if (ageMs < 10 * 60 * 1000 && m.embeds.length > 0)
+                        return false;
+                }
+                return true;
             });
             if (messagesToDelete.size === 0) {
                 return interaction.editReply("✨ No past bot messages found to clean up.");

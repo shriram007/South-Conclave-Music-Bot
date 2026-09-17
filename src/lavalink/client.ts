@@ -13,7 +13,6 @@ import { config } from "../config.js";
 import { buildPlayerMessage } from "./playerUI.js";
 import { getChannelBitrateInfo } from "../utils/formatters.js";
 import { is247Enabled } from "../utils/twentyFourSeven.js";
-import { autoDeleteMessage } from "../utils/cleanup.js";
 
 export let lavalink: LavalinkManager;
 export let discordClient: Client;
@@ -115,22 +114,16 @@ export function initLavalink(client: Client) {
 
       let editedExisting = false;
       if (prevMessageId) {
-        // If the player message was the latest in chat, edit it seamlessly in-place!
-        if (channel.lastMessageId === prevMessageId) {
-          try {
-            const prevMsg = channel.messages.cache.get(prevMessageId) || (await channel.messages.fetch(prevMessageId).catch(() => null));
-            if (prevMsg) {
-              await prevMsg.edit(playerMsgOptions);
-              editedExisting = true;
-            }
-          } catch {}
-        }
-        // If not edited in place (e.g. users chatted in between), clean up the old one
-        if (!editedExisting) {
-          channel.messages.delete(prevMessageId).catch(() => {});
-        }
+        try {
+          const prevMsg = channel.messages.cache.get(prevMessageId) || (await channel.messages.fetch(prevMessageId).catch(() => null));
+          if (prevMsg) {
+            await prevMsg.edit(playerMsgOptions);
+            editedExisting = true;
+          }
+        } catch {}
       }
 
+      // If there was no existing player message to edit (e.g. freshly started playback), send a new one
       if (!editedExisting) {
         const sentMsg = await channel.send(playerMsgOptions);
         activePlayerMessages.set(player.guildId, sentMsg.id);
@@ -181,18 +174,14 @@ export function initLavalink(client: Client) {
           const prevMsg = channel.messages.cache.get(prevMessageId) || (await channel.messages.fetch(prevMessageId).catch(() => null));
           if (prevMsg) {
             await prevMsg.edit({ embeds: [queueFinishedEmbed], components: [] });
-            autoDeleteMessage(prevMsg, 20000);
           } else {
-            const sent = await channel.send({ embeds: [queueFinishedEmbed] });
-            if (sent) autoDeleteMessage(sent, 20000);
+            await channel.send({ embeds: [queueFinishedEmbed] });
           }
         } catch {
-          const sent = await channel.send({ embeds: [queueFinishedEmbed] }).catch(() => null);
-          if (sent) autoDeleteMessage(sent, 20000);
+          await channel.send({ embeds: [queueFinishedEmbed] }).catch(() => null);
         }
       } else {
-        const sent = await channel.send({ embeds: [queueFinishedEmbed] }).catch(() => null);
-        if (sent) autoDeleteMessage(sent, 20000);
+        await channel.send({ embeds: [queueFinishedEmbed] }).catch(() => null);
       }
 
       activePlayerMessages.delete(player.guildId);

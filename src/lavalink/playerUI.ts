@@ -40,6 +40,13 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
       ? "Queue"
       : "Off";
 
+  const loopButtonLabel =
+    player.repeatMode === "track"
+      ? "Loop: Track"
+      : player.repeatMode === "queue"
+      ? "Loop: Queue"
+      : "Loop: Off";
+
   const volume = player.volume;
   const isFilterActive = Boolean(player.getData("hifi_active"));
   const activePresetKey = (player.getData("filter_preset_key") as string) || (isFilterActive ? "hifi" : "reset");
@@ -91,7 +98,7 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
     embed.setThumbnail(current.info.artworkUrl);
   }
 
-  // Row 1: Core playback & navigation (Flavi style)
+  // Row 1: Core playback & navigation (Prev, Play/Pause, Skip, Loop, Shuffle)
   const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId("player_prev")
@@ -110,10 +117,10 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
       .setLabel("Skip")
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
-      .setCustomId("player_stop")
-      .setEmoji("⏹️")
-      .setLabel("Stop")
-      .setStyle(ButtonStyle.Danger),
+      .setCustomId("player_loop")
+      .setEmoji(player.repeatMode === "track" ? "🔂" : "🔁")
+      .setLabel(loopButtonLabel)
+      .setStyle(player.repeatMode !== "off" ? ButtonStyle.Success : ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId("player_shuffle")
       .setEmoji("🔀")
@@ -122,7 +129,7 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
       .setDisabled(queueCount < 2)
   );
 
-  // Row 2: 10s Seek Controls & Volume & Loop Mode
+  // Row 2: 10s Seek Controls, Volume, and Stop
   const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId("player_rewind_10")
@@ -149,10 +156,10 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(volume >= 200),
     new ButtonBuilder()
-      .setCustomId("player_loop")
-      .setEmoji(player.repeatMode === "track" ? "🔂" : "🔁")
-      .setLabel(loopModeDisplay)
-      .setStyle(player.repeatMode !== "off" ? ButtonStyle.Success : ButtonStyle.Secondary)
+      .setCustomId("player_stop")
+      .setEmoji("⏹️")
+      .setLabel("Stop")
+      .setStyle(ButtonStyle.Danger)
   );
 
   // Row 3: 30s Seek Controls & Overlays (Queue, Lyrics, Quick Hi-Fi EQ)
