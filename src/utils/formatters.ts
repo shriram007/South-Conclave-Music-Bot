@@ -54,7 +54,7 @@ export function createProgressBar(
 export function createFlaviProgressBar(
   currentMs: number,
   totalMs: number,
-  barLength: number = 22
+  barLength: number = 14
 ): string {
   if (!totalMs || totalMs <= 0) {
     return `🔴 \`LIVE STREAM\` \`[${formatDuration(currentMs)}]\``;
@@ -67,6 +67,8 @@ export function createFlaviProgressBar(
   for (let i = 0; i < barLength; i++) {
     if (i === progressIndex) {
       bar += "🟣";
+    } else if (i < progressIndex) {
+      bar += "━";
     } else {
       bar += "─";
     }
@@ -74,10 +76,8 @@ export function createFlaviProgressBar(
 
   const currentStr = formatDuration(currentMs);
   const totalStr = formatDuration(totalMs);
-  const spaceCount = Math.max(2, 38 - currentStr.length - totalStr.length);
-  const spaces = " ".repeat(spaceCount);
 
-  return `${bar}\n\`${currentStr}${spaces}${totalStr}\``;
+  return `\`${currentStr}\` ${bar} \`${totalStr}\``;
 }
 
 

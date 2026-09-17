@@ -9,6 +9,7 @@ export let lavalink;
 export let discordClient;
 // Track active player messages so we can update or clean them up
 export const activePlayerMessages = new Map(); // guildId -> messageId
+export const playerMessageCache = new Map(); // guildId -> Message object (fast direct edit)
 // Global cache of stream-restricted / login-required video IDs so we never re-select or loop on them
 export const restrictedTrackIds = new Set();
 /**
@@ -123,10 +124,12 @@ export function initLavalink(client) {
         let preloadedTrackId = null;
         const ticker = setInterval(async () => {
             try {
-                if (!player.connected || !player.queue.current) {
+                // ONLY stop the ticker if there is NO current song in the player
+                if (!player.queue.current) {
                     stopLivePlayerTicker(player.guildId);
                     return;
                 }
+                // If paused or stream not active, skip this tick without killing the timer
                 if (player.paused)
                     return;
                 // Gapless Preload: When current track has < 12 seconds remaining, pre-resolve next track
@@ -143,8 +146,10 @@ export function initLavalink(client) {
                 }
                 await updateActivePlayerMessage(player);
             }
-            catch { }
-        }, 3500);
+            catch (err) {
+                console.warn("[Ticker Tick Error]:", err);
+            }
+        }, 4000);
         liveTickers.set(player.guildId, ticker);
     }
     function stopLivePlayerTicker(guildId) {
@@ -155,6 +160,15 @@ export function initLavalink(client) {
         }
     }
     // Player Events
+    // Self-healing: if Lavalink sends playerUpdate while playing and ticker was somehow paused/lost, revive it
+    lavalink.on("playerUpdate", (_oldPlayer, newPlayer) => {
+        if (newPlayer && newPlayer.queue.current && !newPlayer.paused && newPlayer.playing) {
+            if (!liveTickers.has(newPlayer.guildId)) {
+                console.log(`[Player] Revived live ticker for "${newPlayer.queue.current.info.title}"`);
+                startLivePlayerTicker(newPlayer);
+            }
+        }
+    });
     lavalink.on("trackStart", async (player, track) => {
         if (!player.textChannelId || !track)
             return;
@@ -178,6 +192,7 @@ export function initLavalink(client) {
             // Always send a fresh, prominent Now Playing card at the bottom of the chat for new songs
             const sentMsg = await channel.send(playerMsgOptions);
             activePlayerMessages.set(player.guildId, sentMsg.id);
+            playerMessageCache.set(player.guildId, sentMsg);
             player.setData("active_message_id", sentMsg.id);
             // Start live progress bar updates
             startLivePlayerTicker(player);
@@ -287,6 +302,7 @@ export function initLavalink(client) {
                 autoDeleteMessage(finishedMsg, 20000);
             }
             activePlayerMessages.delete(player.guildId);
+            playerMessageCache.delete(player.guildId);
             player.setData("active_message_id", null);
         }
     });
@@ -299,6 +315,7 @@ export function initLavalink(client) {
     lavalink.on("playerDestroy", (player) => {
         stopLivePlayerTicker(player.guildId);
         activePlayerMessages.delete(player.guildId);
+        playerMessageCache.delete(player.guildId);
     });
     lavalink.on("trackStuck", async (player, track, payload) => {
         console.warn(`[Lavalink] Audio stream stuck for "${track?.info.title}" (${payload.thresholdMs}ms threshold). Seamlessly auto-skipping...`);
@@ -573,8 +590,15 @@ export async function updateActivePlayerMessage(player, immediate = false) {
     }
     state.inFlight = true;
     try {
-        await performPlayerMessageEdit(player);
+        const editPromise = performPlayerMessageEdit(player);
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Edit timeout")), 3500));
+        await Promise.race([editPromise, timeoutPromise]);
         state.lastEditTime = Date.now();
+    }
+    catch (err) {
+        if (err?.message !== "Edit timeout") {
+            console.warn(`[Message Updater] Edit error on guild ${player.guildId}:`, err?.message || err);
+        }
     }
     finally {
         state.inFlight = false;
@@ -603,6 +627,7 @@ async function performPlayerMessageEdit(player) {
             if (botMsg) {
                 messageId = botMsg.id;
                 activePlayerMessages.set(player.guildId, messageId);
+                playerMessageCache.set(player.guildId, botMsg);
                 player.setData("active_message_id", messageId);
             }
         }
@@ -611,12 +636,17 @@ async function performPlayerMessageEdit(player) {
     if (!messageId)
         return;
     try {
-        const msg = channel.messages.cache.get(messageId) || (await channel.messages.fetch(messageId).catch(() => null));
+        let msg = playerMessageCache.get(player.guildId) || channel.messages.cache.get(messageId) || null;
+        if (!msg) {
+            msg = await channel.messages.fetch(messageId).catch(() => null);
+        }
         if (msg) {
-            await msg.edit(buildPlayerMessage(player));
+            const editedMsg = await msg.edit(buildPlayerMessage(player));
+            playerMessageCache.set(player.guildId, editedMsg);
         }
         else {
             activePlayerMessages.delete(player.guildId);
+            playerMessageCache.delete(player.guildId);
             player.setData("active_message_id", null);
         }
     }
@@ -624,7 +654,11 @@ async function performPlayerMessageEdit(player) {
         if (err.code === 10008) {
             // 10008: Unknown Message (deleted by user or mod)
             activePlayerMessages.delete(player.guildId);
+            playerMessageCache.delete(player.guildId);
             player.setData("active_message_id", null);
+        }
+        else if (err.status === 429) {
+            console.warn(`[Message Updater] Discord 429 rate limit on guild ${player.guildId}. Backing off gracefully.`);
         }
     }
 }

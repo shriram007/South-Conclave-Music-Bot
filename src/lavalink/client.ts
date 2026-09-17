@@ -4,6 +4,7 @@ import {
   Client,
   EmbedBuilder,
   GuildMember,
+  Message,
   StringSelectMenuInteraction,
   TextChannel,
   VoiceBasedChannel,
@@ -20,6 +21,7 @@ export let discordClient: Client;
 
 // Track active player messages so we can update or clean them up
 export const activePlayerMessages = new Map<string, string>(); // guildId -> messageId
+export const playerMessageCache = new Map<string, Message>(); // guildId -> Message object (fast direct edit)
 
 // Global cache of stream-restricted / login-required video IDs so we never re-select or loop on them
 export const restrictedTrackIds = new Set<string>();
@@ -145,10 +147,13 @@ export function initLavalink(client: Client) {
 
     const ticker = setInterval(async () => {
       try {
-        if (!player.connected || !player.queue.current) {
+        // ONLY stop the ticker if there is NO current song in the player
+        if (!player.queue.current) {
           stopLivePlayerTicker(player.guildId);
           return;
         }
+
+        // If paused or stream not active, skip this tick without killing the timer
         if (player.paused) return;
 
         // Gapless Preload: When current track has < 12 seconds remaining, pre-resolve next track
@@ -165,8 +170,10 @@ export function initLavalink(client: Client) {
         }
 
         await updateActivePlayerMessage(player);
-      } catch {}
-    }, 3500);
+      } catch (err) {
+        console.warn("[Ticker Tick Error]:", err);
+      }
+    }, 4000);
     liveTickers.set(player.guildId, ticker);
   }
 
@@ -179,6 +186,16 @@ export function initLavalink(client: Client) {
   }
 
   // Player Events
+  // Self-healing: if Lavalink sends playerUpdate while playing and ticker was somehow paused/lost, revive it
+  lavalink.on("playerUpdate", (_oldPlayer: any, newPlayer: Player) => {
+    if (newPlayer && newPlayer.queue.current && !newPlayer.paused && newPlayer.playing) {
+      if (!liveTickers.has(newPlayer.guildId)) {
+        console.log(`[Player] Revived live ticker for "${newPlayer.queue.current.info.title}"`);
+        startLivePlayerTicker(newPlayer);
+      }
+    }
+  });
+
   lavalink.on("trackStart", async (player: Player, track: Track | null) => {
     if (!player.textChannelId || !track) return;
     const channel = (client.channels.cache.get(player.textChannelId) ||
@@ -202,6 +219,7 @@ export function initLavalink(client: Client) {
       // Always send a fresh, prominent Now Playing card at the bottom of the chat for new songs
       const sentMsg = await channel.send(playerMsgOptions);
       activePlayerMessages.set(player.guildId, sentMsg.id);
+      playerMessageCache.set(player.guildId, sentMsg);
       player.setData("active_message_id", sentMsg.id);
 
       // Start live progress bar updates
@@ -326,6 +344,7 @@ export function initLavalink(client: Client) {
       }
 
       activePlayerMessages.delete(player.guildId);
+      playerMessageCache.delete(player.guildId);
       player.setData("active_message_id", null);
     }
   });
@@ -340,6 +359,7 @@ export function initLavalink(client: Client) {
   lavalink.on("playerDestroy", (player: Player) => {
     stopLivePlayerTicker(player.guildId);
     activePlayerMessages.delete(player.guildId);
+    playerMessageCache.delete(player.guildId);
   });
 
   lavalink.on("trackStuck", async (player: Player, track, payload) => {
@@ -663,8 +683,16 @@ export async function updateActivePlayerMessage(player: Player, immediate: boole
 
   state.inFlight = true;
   try {
-    await performPlayerMessageEdit(player);
+    const editPromise = performPlayerMessageEdit(player);
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("Edit timeout")), 3500)
+    );
+    await Promise.race([editPromise, timeoutPromise]);
     state.lastEditTime = Date.now();
+  } catch (err: any) {
+    if (err?.message !== "Edit timeout") {
+      console.warn(`[Message Updater] Edit error on guild ${player.guildId}:`, err?.message || err);
+    }
   } finally {
     state.inFlight = false;
     if (state.pending) {
@@ -693,6 +721,7 @@ async function performPlayerMessageEdit(player: Player) {
       if (botMsg) {
         messageId = botMsg.id;
         activePlayerMessages.set(player.guildId, messageId);
+        playerMessageCache.set(player.guildId, botMsg);
         player.setData("active_message_id", messageId);
       }
     } catch {}
@@ -701,18 +730,27 @@ async function performPlayerMessageEdit(player: Player) {
   if (!messageId) return;
 
   try {
-    const msg = channel.messages.cache.get(messageId) || (await channel.messages.fetch(messageId).catch(() => null));
+    let msg: Message<any> | null = playerMessageCache.get(player.guildId) || channel.messages.cache.get(messageId) || null;
+    if (!msg) {
+      msg = await channel.messages.fetch(messageId).catch(() => null);
+    }
+
     if (msg) {
-      await msg.edit(buildPlayerMessage(player));
+      const editedMsg = await msg.edit(buildPlayerMessage(player));
+      playerMessageCache.set(player.guildId, editedMsg);
     } else {
       activePlayerMessages.delete(player.guildId);
+      playerMessageCache.delete(player.guildId);
       player.setData("active_message_id", null);
     }
   } catch (err: any) {
     if (err.code === 10008) {
       // 10008: Unknown Message (deleted by user or mod)
       activePlayerMessages.delete(player.guildId);
+      playerMessageCache.delete(player.guildId);
       player.setData("active_message_id", null);
+    } else if (err.status === 429) {
+      console.warn(`[Message Updater] Discord 429 rate limit on guild ${player.guildId}. Backing off gracefully.`);
     }
   }
 }

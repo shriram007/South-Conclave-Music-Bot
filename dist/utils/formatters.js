@@ -40,7 +40,7 @@ export function createProgressBar(currentMs, totalMs, barLength = 15, isPaused =
 /**
  * Flavi-style clean progress slider (purple dot on sleek track with split timestamps)
  */
-export function createFlaviProgressBar(currentMs, totalMs, barLength = 22) {
+export function createFlaviProgressBar(currentMs, totalMs, barLength = 14) {
     if (!totalMs || totalMs <= 0) {
         return `🔴 \`LIVE STREAM\` \`[${formatDuration(currentMs)}]\``;
     }
@@ -51,15 +51,16 @@ export function createFlaviProgressBar(currentMs, totalMs, barLength = 22) {
         if (i === progressIndex) {
             bar += "🟣";
         }
+        else if (i < progressIndex) {
+            bar += "━";
+        }
         else {
             bar += "─";
         }
     }
     const currentStr = formatDuration(currentMs);
     const totalStr = formatDuration(totalMs);
-    const spaceCount = Math.max(2, 38 - currentStr.length - totalStr.length);
-    const spaces = " ".repeat(spaceCount);
-    return `${bar}\n\`${currentStr}${spaces}${totalStr}\``;
+    return `\`${currentStr}\` ${bar} \`${totalStr}\``;
 }
 /**
  * Return friendly badges and bitrate descriptions for various audio sources

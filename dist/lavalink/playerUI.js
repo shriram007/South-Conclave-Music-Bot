@@ -39,10 +39,10 @@ export function buildPlayerMessage(player, track) {
     const embed = new EmbedBuilder()
         .setColor(0x5865f2)
         .setDescription(`### Now playing\n` +
-        `────────────────────────────────────────\n` +
+        `---\n` +
         `## [${safeTitle}](${current.info.uri || "https://discord.com"})\n` +
         `• **Added by** ${requesterDisplay}\n` +
-        `• 🔊 ${vcMention}\n\n` +
+        `• **Voice Channel:** ${vcMention}\n\n` +
         `Queue Size: \`${queueCount}\` · Volume: \`${volume}%\` · Loop: \`${loopModeDisplay}\`\n\n` +
         `${progressBar}`)
         .setFooter({
