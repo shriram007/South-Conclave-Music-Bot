@@ -382,70 +382,11 @@ async function handleSelectMenuInteraction(interaction: StringSelectMenuInteract
         presetLabel = "🌊 Vaporwave";
         break;
 
-      case "chipmunk":
-        player.setData("hifi_active", false);
-        player.setData("eq_preset", "🐿️ Chipmunk");
-        await player.filterManager.setSpeed(1.2);
-        await player.filterManager.setPitch(1.35);
-        presetLabel = "🐿️ Chipmunk Mode";
-        break;
-
-      case "robot":
-        player.setData("hifi_active", false);
-        player.setData("eq_preset", "🤖 Robot Synth");
-        await player.filterManager.toggleTremolo(14.0, 0.9);
-        presetLabel = "🤖 Robot Synth";
-        break;
-
-      case "wobbly":
-        player.setData("hifi_active", false);
-        player.setData("eq_preset", "🌀 Drunk / Dizzy");
-        await player.filterManager.toggleVibrato(4.0, 0.75);
-        presetLabel = "🌀 Drunk / Dizzy";
-        break;
-
       case "karaoke":
         player.setData("hifi_active", false);
         player.setData("eq_preset", "🎤 Karaoke");
         await player.filterManager.toggleKaraoke(1, 1, 220, 100);
-        presetLabel = "🎤 Karaoke";
-        break;
-
-      case "muffled":
-        player.setData("hifi_active", false);
-        player.setData("eq_preset", "🚪 Next Room");
-        await player.filterManager.setEQ(EQ_PRESETS.nextdoor);
-        await player.filterManager.toggleLowPass(25);
-        presetLabel = "🚪 Next Room (Muffled)";
-        break;
-
-      case "radio":
-        player.setData("hifi_active", false);
-        player.setData("eq_preset", "☎️ Vintage Radio");
-        await player.filterManager.setEQ(EQ_PRESETS.radio);
-        presetLabel = "☎️ 1920s Vintage Radio";
-        break;
-
-      case "underwater":
-        player.setData("hifi_active", false);
-        player.setData("eq_preset", "🤿 Underwater");
-        await player.filterManager.setEQ(EQ_PRESETS.nextdoor);
-        await player.filterManager.toggleTremolo(4.0, 0.6);
-        presetLabel = "🤿 Underwater";
-        break;
-
-      case "megaphone":
-        player.setData("hifi_active", false);
-        player.setData("eq_preset", "📢 Megaphone");
-        await player.filterManager.setEQ(EQ_PRESETS.megaphone);
-        presetLabel = "📢 Megaphone";
-        break;
-
-      case "turbo":
-        player.setData("hifi_active", false);
-        player.setData("eq_preset", "🏎️ Turbo Speed");
-        await player.filterManager.setSpeed(1.35);
-        presetLabel = "🏎️ Turbo Speed (1.35x)";
+        presetLabel = "🎤 Karaoke (Sing-Along)";
         break;
 
       case "reset":

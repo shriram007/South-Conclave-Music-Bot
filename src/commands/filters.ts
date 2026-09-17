@@ -17,21 +17,12 @@ export const filterCommand = {
         .addChoices(
           { name: "💎 Hi-Fi Studio (Audiophile Clarity & Sparkle)", value: "hifi" },
           { name: "🔊 Bass Boost (Punchy Deep Low-End)", value: "bassboost" },
-          { name: "💥 Nuclear Bass (Extreme Ear-Rattling Sub)", value: "nuclear" },
+          { name: "💥 Nuclear Bass (Extreme Sub Rumble)", value: "nuclear" },
           { name: "🎤 Vocal / Treble Boost (Crisp Highs)", value: "treble" },
-          { name: "🎧 8D Audio (Rotating Binaural Effect)", value: "8d" },
+          { name: "🎧 8D Audio (Rotating Binaural Immersion)", value: "8d" },
           { name: "⚡ Nightcore (Fast Tempo & High Pitch)", value: "nightcore" },
           { name: "🌊 Vaporwave (Slowed & Relaxed)", value: "vaporwave" },
-          { name: "🐿️ Chipmunk (Funny High-Pitched Vocals)", value: "chipmunk" },
-          { name: "👺 Darth Vader / Demon (Deep Voice Shift)", value: "darthvader" },
-          { name: "🚪 Next Room / Party in the Hallway (Muffled)", value: "muffled" },
-          { name: "☎️ 1920s Old Radio / Telephone", value: "radio" },
-          { name: "🤿 Underwater (Submerged Bubbly Tone)", value: "underwater" },
           { name: "🎤 Karaoke (Vocal Reducer / Sing-Along)", value: "karaoke" },
-          { name: "🤖 Robot / Synth (Metallic Ring Modulator)", value: "robot" },
-          { name: "🌀 Drunk / Dizzy (Psychedelic Pitch Wobble)", value: "wobbly" },
-          { name: "📢 Megaphone (Loud Street PA Speaker)", value: "megaphone" },
-          { name: "🏎️ Turbo Rush (1.35x High Energy Tempo)", value: "turbo" },
           { name: "🔄 Reset to Flat / Pure Audio", value: "reset" }
         )
     ),
@@ -105,79 +96,12 @@ export const filterCommand = {
           await updateActivePlayerMessage(player);
           return interaction.editReply("🌊 **Vaporwave Active!** Slowed, dreamy aesthetic tone.");
 
-        case "chipmunk":
-          player.setData("hifi_active", false);
-          player.setData("eq_preset", "🐿️ Chipmunk");
-          await player.filterManager.setSpeed(1.2);
-          await player.filterManager.setPitch(1.35);
-          await updateActivePlayerMessage(player);
-          return interaction.editReply("🐿️ **Chipmunk Mode Active!** High-pitched squeaky vocals.");
-
-        case "darthvader":
-          player.setData("hifi_active", false);
-          player.setData("eq_preset", "👺 Darth Vader");
-          await player.filterManager.setSpeed(0.92);
-          await player.filterManager.setPitch(0.68);
-          await updateActivePlayerMessage(player);
-          return interaction.editReply("👺 **Darth Vader Active!** Deep, ominous orator voice pitch.");
-
-        case "muffled":
-          player.setData("hifi_active", false);
-          player.setData("eq_preset", "🚪 Next Room");
-          await player.filterManager.setEQ(EQ_PRESETS.nextdoor);
-          await player.filterManager.toggleLowPass(25);
-          await updateActivePlayerMessage(player);
-          return interaction.editReply("🚪 **Next Room Mode Active!** Sounds like listening from the hallway outside.");
-
-        case "radio":
-          player.setData("hifi_active", false);
-          player.setData("eq_preset", "☎️ Vintage Radio");
-          await player.filterManager.setEQ(EQ_PRESETS.radio);
-          await updateActivePlayerMessage(player);
-          return interaction.editReply("☎️ **1920s Telephone / Radio Active!** Vintage lo-fi sound.");
-
-        case "underwater":
-          player.setData("hifi_active", false);
-          player.setData("eq_preset", "🤿 Underwater");
-          await player.filterManager.setEQ(EQ_PRESETS.nextdoor);
-          await player.filterManager.toggleTremolo(4.0, 0.6);
-          await updateActivePlayerMessage(player);
-          return interaction.editReply("🤿 **Underwater Mode Active!** Bubbly, submerged acoustic simulation.");
-
         case "karaoke":
           player.setData("hifi_active", false);
           player.setData("eq_preset", "🎤 Karaoke");
           await player.filterManager.toggleKaraoke(1, 1, 220, 100);
           await updateActivePlayerMessage(player);
-          return interaction.editReply("🎤 **Karaoke Mode Active!** Lead vocals dampened for sing-along.");
-
-        case "robot":
-          player.setData("hifi_active", false);
-          player.setData("eq_preset", "🤖 Robot Synth");
-          await player.filterManager.toggleTremolo(14.0, 0.9);
-          await updateActivePlayerMessage(player);
-          return interaction.editReply("🤖 **Robot Synth Active!** Fast metallic ring modulation.");
-
-        case "wobbly":
-          player.setData("hifi_active", false);
-          player.setData("eq_preset", "🌀 Drunk / Dizzy");
-          await player.filterManager.toggleVibrato(4.0, 0.75);
-          await updateActivePlayerMessage(player);
-          return interaction.editReply("🌀 **Drunk / Dizzy Mode Active!** Psychedelic pitch oscillation.");
-
-        case "megaphone":
-          player.setData("hifi_active", false);
-          player.setData("eq_preset", "📢 Megaphone");
-          await player.filterManager.setEQ(EQ_PRESETS.megaphone);
-          await updateActivePlayerMessage(player);
-          return interaction.editReply("📢 **Megaphone Active!** Public address horn speaker effect.");
-
-        case "turbo":
-          player.setData("hifi_active", false);
-          player.setData("eq_preset", "🏎️ Turbo Speed");
-          await player.filterManager.setSpeed(1.35);
-          await updateActivePlayerMessage(player);
-          return interaction.editReply("🏎️ **Turbo Speed Active!** 1.35x high-tempo rush.");
+          return interaction.editReply("🎤 **Karaoke Mode Active!** Center lead vocals dampened for sing-along.");
 
         case "reset":
         default:

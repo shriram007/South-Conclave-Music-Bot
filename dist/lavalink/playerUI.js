@@ -105,15 +105,7 @@ export function buildPlayerMessage(player, track) {
         { label: "8D Audio", value: "8d", emoji: "🎧", description: "Rotating 360° binaural immersion" },
         { label: "Nightcore", value: "nightcore", emoji: "⚡", description: "Fast tempo & pitch boost" },
         { label: "Vaporwave", value: "vaporwave", emoji: "🌊", description: "Slowed & relaxed aesthetic" },
-        { label: "Chipmunk Mode", value: "chipmunk", emoji: "🐿️", description: "Funny high-pitched squeak" },
-        { label: "Robot / Synth", value: "robot", emoji: "🤖", description: "Metallic ring-modulator effect" },
-        { label: "Drunk / Dizzy", value: "wobbly", emoji: "🌀", description: "Psychedelic pitch wobble" },
-        { label: "Karaoke (Vocal Reducer)", value: "karaoke", emoji: "🎤", description: "Suppresses vocals for sing-along" },
-        { label: "Next Room / Party", value: "muffled", emoji: "🚪", description: "Muffled outside club hallway" },
-        { label: "1920s Vintage Radio", value: "radio", emoji: "☎️", description: "Lo-fi telephone / antique AM" },
-        { label: "Underwater", value: "underwater", emoji: "🤿", description: "Submerged bubbly tone" },
-        { label: "Megaphone", value: "megaphone", emoji: "📢", description: "Loud street PA horn speaker" },
-        { label: "Turbo Rush (1.35x)", value: "turbo", emoji: "🏎️", description: "High-tempo workout/gaming boost" },
+        { label: "Karaoke (Sing-Along)", value: "karaoke", emoji: "🎤", description: "Suppresses vocals for sing-along" },
         { label: "Reset to Flat / Pure Audio", value: "reset", emoji: "🔄", description: "Pristine lossless studio audio" },
     ]));
     return {
