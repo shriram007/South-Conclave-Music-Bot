@@ -23,7 +23,7 @@ export const queueCommand = {
     const current = player.queue.current;
     const tracks = player.queue.tracks;
     const page = (interaction.options.getInteger("page") || 1) - 1;
-    const pageSize = 10;
+    const pageSize = 5;
     const totalPages = Math.ceil(tracks.length / pageSize) || 1;
 
     if (page >= totalPages) {
@@ -56,13 +56,18 @@ export const queueCommand = {
     if (pageTracks.length === 0) {
       embed.addFields([{ name: "Queue", value: "No more tracks in queue. Add more using `/play`!" }]);
     } else {
-      const list = pageTracks
+      let list = pageTracks
         .map((t, i) => {
           const index = startIdx + i + 1;
           const reqName = t.requester ? ` • Req: **${(t.requester as any).displayName || (t.requester as any).username || "Member"}**` : "";
-          return `\`${index}.\` [${t.info.title.substring(0, 40)}](${t.info.uri}) - \`${formatDuration(t.info.duration || 0)}\`${reqName}`;
+          const title = t.info.title.length > 35 ? t.info.title.substring(0, 32) + "..." : t.info.title;
+          return `\`${index}.\` [${title}](${t.info.uri}) - \`${formatDuration(t.info.duration || 0)}\`${reqName}`;
         })
         .join("\n");
+
+      if (list.length > 1000) {
+        list = list.substring(0, 990) + "...";
+      }
 
       embed.addFields([{ name: `Tracks (${startIdx + 1}-${startIdx + pageTracks.length} of ${tracks.length})`, value: list }]);
     }

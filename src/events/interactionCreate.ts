@@ -119,10 +119,18 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
       }
 
       case "player_skip": {
-        await player.skip();
-        await interaction.reply({
-          content: `⏭️ **${interaction.user.username}** skipped the track.`,
-        });
+        try {
+          if (player.queue.tracks.length > 0) {
+            await player.skip();
+          } else {
+            await player.stopPlaying();
+          }
+          await interaction.reply({
+            content: `⏭️ **${interaction.user.username}** skipped the track.`,
+          }).catch(() => {});
+        } catch {
+          await player.stopPlaying().catch(() => {});
+        }
         break;
       }
 

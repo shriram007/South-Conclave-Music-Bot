@@ -60,9 +60,19 @@ export const skipCommand = {
     const player = await getPlayerWithGate(interaction);
     if (!player) return;
 
+    await interaction.deferReply();
     const currentTitle = player.queue.current?.info.title || "Current song";
-    await player.skip();
-    return interaction.reply(`⏭️ Skipped **${currentTitle}**`);
+    try {
+      if (player.queue.tracks.length > 0) {
+        await player.skip();
+      } else {
+        await player.stopPlaying();
+      }
+      return interaction.editReply(`⏭️ Skipped **${currentTitle}**`);
+    } catch {
+      await player.stopPlaying().catch(() => {});
+      return interaction.editReply(`⏭️ Skipped **${currentTitle}**`);
+    }
   },
 };
 

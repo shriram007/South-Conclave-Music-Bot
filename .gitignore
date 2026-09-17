@@ -7,9 +7,6 @@
 # Dependencies
 node_modules/
 
-# TypeScript Build Output
-dist/
-
 # Lavalink Server Binary (Large 75MB+ binary)
 *.jar
 lavalink/Lavalink.jar
