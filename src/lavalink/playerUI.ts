@@ -139,7 +139,7 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
       .addOptions([
         { label: "Hi-Fi Studio (Audiophile Sparkle)", value: "hifi", emoji: "💎", description: "Studio clarity & dynamics" },
         { label: "Bass Boost", value: "bassboost", emoji: "🔊", description: "Punchy deep sub-bass" },
-        { label: "Nuclear Bass", value: "nuclear", emoji: "💥", description: "Extreme ear-rattling sub rumble" },
+        { label: "Turbo Rush (1.35x)", value: "turbo", emoji: "🏎️", description: "High-tempo workout/gaming boost" },
         { label: "Vocal / Treble Boost", value: "treble", emoji: "🎤", description: "Crisp acoustic highs & clarity" },
         { label: "8D Audio", value: "8d", emoji: "🎧", description: "Rotating 360° binaural immersion" },
         { label: "Nightcore", value: "nightcore", emoji: "⚡", description: "Fast tempo & pitch boost" },

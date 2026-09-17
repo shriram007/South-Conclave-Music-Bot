@@ -347,11 +347,11 @@ async function handleSelectMenuInteraction(interaction: StringSelectMenuInteract
         presetLabel = "🔊 Bass Boost";
         break;
 
-      case "nuclear":
+      case "turbo":
         player.setData("hifi_active", false);
-        player.setData("eq_preset", "💥 Nuclear Bass");
-        await player.filterManager.setEQ(EQ_PRESETS.nuclear);
-        presetLabel = "💥 Nuclear Bass";
+        player.setData("eq_preset", "🏎️ Turbo Rush");
+        await player.filterManager.setSpeed(1.35);
+        presetLabel = "🏎️ Turbo Rush (1.35x)";
         break;
 
       case "treble":

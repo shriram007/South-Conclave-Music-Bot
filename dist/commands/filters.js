@@ -9,7 +9,7 @@ export const filterCommand = {
         .setName("preset")
         .setDescription("Select an audio preset")
         .setRequired(true)
-        .addChoices({ name: "💎 Hi-Fi Studio (Audiophile Clarity & Sparkle)", value: "hifi" }, { name: "🔊 Bass Boost (Punchy Deep Low-End)", value: "bassboost" }, { name: "💥 Nuclear Bass (Extreme Sub Rumble)", value: "nuclear" }, { name: "🎤 Vocal / Treble Boost (Crisp Highs)", value: "treble" }, { name: "🎧 8D Audio (Rotating Binaural Immersion)", value: "8d" }, { name: "⚡ Nightcore (Fast Tempo & High Pitch)", value: "nightcore" }, { name: "🌊 Vaporwave (Slowed & Relaxed)", value: "vaporwave" }, { name: "🎤 Karaoke (Vocal Reducer / Sing-Along)", value: "karaoke" }, { name: "🔄 Reset to Flat / Pure Audio", value: "reset" })),
+        .addChoices({ name: "💎 Hi-Fi Studio (Audiophile Clarity & Sparkle)", value: "hifi" }, { name: "🔊 Bass Boost (Punchy Deep Low-End)", value: "bassboost" }, { name: "🏎️ Turbo Rush (1.35x High Energy Tempo)", value: "turbo" }, { name: "🎤 Vocal / Treble Boost (Crisp Highs)", value: "treble" }, { name: "🎧 8D Audio (Rotating Binaural Immersion)", value: "8d" }, { name: "⚡ Nightcore (Fast Tempo & High Pitch)", value: "nightcore" }, { name: "🌊 Vaporwave (Slowed & Relaxed)", value: "vaporwave" }, { name: "🎤 Karaoke (Vocal Reducer / Sing-Along)", value: "karaoke" }, { name: "🔄 Reset to Flat / Pure Audio", value: "reset" })),
     async execute(interaction) {
         const player = lavalink.getPlayer(interaction.guildId);
         if (!player) {
@@ -38,12 +38,12 @@ export const filterCommand = {
                     await player.filterManager.setEQ(EQ_PRESETS.bassboost);
                     await updateActivePlayerMessage(player);
                     return interaction.editReply("🔊 **Bass Boost Applied!** Deep, punchy sub-bass active.");
-                case "nuclear":
+                case "turbo":
                     player.setData("hifi_active", false);
-                    player.setData("eq_preset", "💥 Nuclear Bass");
-                    await player.filterManager.setEQ(EQ_PRESETS.nuclear);
+                    player.setData("eq_preset", "🏎️ Turbo Rush");
+                    await player.filterManager.setSpeed(1.35);
                     await updateActivePlayerMessage(player);
-                    return interaction.editReply("💥 **Nuclear Bass Active!** Max sub-woofer rumble activated.");
+                    return interaction.editReply("🏎️ **Turbo Rush Applied!** 1.35x high-energy tempo boost.");
                 case "treble":
                     player.setData("hifi_active", false);
                     player.setData("eq_preset", "🎤 Treble Boost");
