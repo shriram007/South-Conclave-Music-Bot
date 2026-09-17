@@ -93,10 +93,9 @@ async function smartSearch(player, query, isUrl, user) {
         }
         return null;
     }
-    const nodesToTry = [
-        player.node,
-        ...Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.id !== player.node.id && n.connected),
-    ];
+    const serenetia = Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.id === "Serenetia-HighSpeed" && n.connected);
+    const otherNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected && !n.id.includes("Custom") && n.id !== "Serenetia-HighSpeed");
+    const nodesToTry = serenetia ? [serenetia, ...otherNodes] : [player.node, ...otherNodes];
     // 1. Try YouTube Music (ytmsearch) across all connected nodes
     for (const node of nodesToTry) {
         try {
@@ -260,6 +259,14 @@ export const playCommand = {
                 await interaction.editReply(`⚠️ An error occurred while searching: ${res.exception?.message || "Unknown error"}`);
                 autoDeleteReply(interaction, 10000);
                 return;
+            }
+            // Ensure player is operating on Serenetia-HighSpeed (with active YouTube proxies) instead of blocked nodes
+            if (player.node?.id === "Trinium-FastNode") {
+                const serenetia = lavalink.nodeManager.nodes.get("Serenetia-HighSpeed");
+                if (serenetia?.connected) {
+                    console.log(`[Play Command] Migrating player from ${player.node.id} to Serenetia-HighSpeed...`);
+                    await player.changeNode(serenetia, false).catch(() => { });
+                }
             }
             // Check if the user explicitly provided a genuine Playlist or Album URL (not an algorithmic mix)
             const isActualPlaylist = isUrl && (rawQuery.includes("/playlist") ||

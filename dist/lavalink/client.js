@@ -352,6 +352,21 @@ export function initLavalink(client) {
     });
     return lavalink;
 }
+export function getBestNode() {
+    if (config.lavalink.host && config.lavalink.host !== "localhost" && !config.lavalink.host.includes("jirayu")) {
+        const custom = lavalink.nodeManager.nodes.get("Primary-CustomNode");
+        if (custom?.connected)
+            return "Primary-CustomNode";
+    }
+    const serenetia = lavalink.nodeManager.nodes.get("Serenetia-HighSpeed");
+    if (serenetia?.connected)
+        return "Serenetia-HighSpeed";
+    const millo = lavalink.nodeManager.nodes.get("Millo-BackupNode");
+    if (millo?.connected)
+        return "Millo-BackupNode";
+    const fallback = Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected && !n.id.includes("Custom"));
+    return fallback?.id;
+}
 /**
  * Validates member voice state and gets or creates player
  */
@@ -385,7 +400,8 @@ export async function getOrCreatePlayer(interaction) {
     }
     let player = lavalink.getPlayer(interaction.guildId);
     if (!player) {
-        console.log(`[Player] Creating player for guild ${interaction.guildId} in voice channel ${voiceChannel.name} (${voiceChannel.id})`);
+        const targetNode = getBestNode();
+        console.log(`[Player] Creating player for guild ${interaction.guildId} in voice channel ${voiceChannel.name} (${voiceChannel.id}) on node "${targetNode || "default"}"`);
         player = lavalink.createPlayer({
             guildId: interaction.guildId,
             voiceChannelId: voiceChannel.id,
@@ -395,9 +411,18 @@ export async function getOrCreatePlayer(interaction) {
             volume: 100,
             instaUpdateFiltersFix: true,
             applyVolumeAsFilter: false,
+            ...(targetNode ? { node: targetNode } : {}),
         });
         player.setData("hifi_active", false);
         player.setData("eq_preset", "Normal (Flat)");
+    }
+    else if (player.node?.id === "Trinium-FastNode") {
+        // If existing player was assigned to Trinium (which has blocked YouTube IP), migrate to Serenetia proxy node
+        const serenetia = lavalink.nodeManager.nodes.get("Serenetia-HighSpeed");
+        if (serenetia?.connected) {
+            console.log(`[Player] Migrating existing player from ${player.node.id} to Serenetia-HighSpeed proxy node...`);
+            await player.changeNode(serenetia, false).catch(() => { });
+        }
     }
     if (!player.connected) {
         console.log(`[Player] Connecting to voice channel ${voiceChannel.name}...`);
