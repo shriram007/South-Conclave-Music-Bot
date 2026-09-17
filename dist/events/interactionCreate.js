@@ -3,6 +3,7 @@ import { commandMap } from "../commands/index.js";
 import { fetchSongLyrics } from "../commands/lyrics.js";
 import { lavalink, updateActivePlayerMessage, validateVoiceGate } from "../lavalink/client.js";
 import { buildPlayerMessage } from "../lavalink/playerUI.js";
+import { autoDeleteMessage } from "../utils/cleanup.js";
 import { EQ_PRESETS } from "../utils/equalizer.js";
 import { formatDuration } from "../utils/formatters.js";
 export async function handleInteraction(interaction) {
@@ -157,6 +158,13 @@ async function handleButtonInteraction(interaction) {
                     else {
                         await player.stopPlaying();
                     }
+                    if (interaction.channel && "send" in interaction.channel) {
+                        const notice = await interaction.channel.send({
+                            content: `⏭️ **${interaction.user.username}** skipped the track.`,
+                        }).catch(() => null);
+                        if (notice)
+                            autoDeleteMessage(notice, 5000);
+                    }
                 }
                 catch {
                     await player.stopPlaying().catch(() => { });
@@ -168,6 +176,13 @@ async function handleButtonInteraction(interaction) {
                     const prev = player.queue.previous[0];
                     await player.queue.add(prev, 0);
                     await player.skip();
+                    if (interaction.channel && "send" in interaction.channel) {
+                        const notice = await interaction.channel.send({
+                            content: `⏮️ **${interaction.user.username}** replayed previous track.`,
+                        }).catch(() => null);
+                        if (notice)
+                            autoDeleteMessage(notice, 5000);
+                    }
                 }
                 else {
                     await interaction.followUp({
@@ -198,6 +213,18 @@ async function handleButtonInteraction(interaction) {
                         : "off";
                 await player.setRepeatMode(nextMode);
                 await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
+                const loopNotice = nextMode === "track"
+                    ? "🔂 Looping **current track**."
+                    : nextMode === "queue"
+                        ? "🔁 Looping **entire queue**."
+                        : "➡️ Loop **disabled**.";
+                if (interaction.channel && "send" in interaction.channel) {
+                    const notice = await interaction.channel.send({
+                        content: `${loopNotice} (by **${interaction.user.username}**)`,
+                    }).catch(() => null);
+                    if (notice)
+                        autoDeleteMessage(notice, 5000);
+                }
                 break;
             }
             case "player_shuffle": {
@@ -210,6 +237,13 @@ async function handleButtonInteraction(interaction) {
                 }
                 await player.queue.shuffle();
                 await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
+                if (interaction.channel && "send" in interaction.channel) {
+                    const notice = await interaction.channel.send({
+                        content: `🔀 Queue shuffled by **${interaction.user.username}** (${player.queue.tracks.length} tracks).`,
+                    }).catch(() => null);
+                    if (notice)
+                        autoDeleteMessage(notice, 5000);
+                }
                 break;
             }
             case "player_voldown": {
@@ -226,12 +260,14 @@ async function handleButtonInteraction(interaction) {
             }
             case "player_hifieq": {
                 const isCurrentlyActive = Boolean(player.getData("hifi_active"));
+                let hifiNoticeText = "";
                 if (isCurrentlyActive) {
                     player.setData("hifi_active", false);
                     player.setData("filter_preset_key", "reset");
                     player.setData("eq_preset", "Normal (Flat)");
                     await player.filterManager.clearEQ();
                     await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
+                    hifiNoticeText = "🔄 Equalizer reset to **Normal (Flat)**.";
                 }
                 else {
                     player.setData("hifi_active", true);
@@ -239,6 +275,14 @@ async function handleButtonInteraction(interaction) {
                     player.setData("eq_preset", "💎 Hi-Fi Studio");
                     await player.filterManager.setEQ(EQ_PRESETS.hifi);
                     await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
+                    hifiNoticeText = "💎 **Hi-Fi Studio Preset Activated!** (Audiophile dynamics & crisp highs)";
+                }
+                if (interaction.channel && "send" in interaction.channel) {
+                    const notice = await interaction.channel.send({
+                        content: `${hifiNoticeText} (by **${interaction.user.username}**)`,
+                    }).catch(() => null);
+                    if (notice)
+                        autoDeleteMessage(notice, 5000);
                 }
                 break;
             }
@@ -397,6 +441,13 @@ async function handleSelectMenuInteraction(interaction) {
                     break;
             }
             await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
+            if (interaction.channel && "send" in interaction.channel) {
+                const notice = await interaction.channel.send({
+                    content: `🎛️ **${interaction.user.username}** applied sound filter: **${presetLabel}**`,
+                }).catch(() => null);
+                if (notice)
+                    autoDeleteMessage(notice, 5000);
+            }
         }
     }
     catch (err) {
