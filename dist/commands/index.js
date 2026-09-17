@@ -1,5 +1,5 @@
 import { playCommand } from "./play.js";
-import { loopCommand, pauseCommand, previousCommand, resumeCommand, seekCommand, shuffleCommand, skipCommand, stopCommand, } from "./controls.js";
+import { clearCommand, loopCommand, pauseCommand, previousCommand, removeCommand, resumeCommand, seekCommand, shuffleCommand, skipCommand, stopCommand, } from "./controls.js";
 import { queueCommand } from "./queue.js";
 import { nowplayingCommand } from "./nowplaying.js";
 import { volumeCommand } from "./volume.js";
@@ -12,6 +12,8 @@ export const commands = [
     pauseCommand,
     resumeCommand,
     skipCommand,
+    removeCommand,
+    clearCommand,
     previousCommand,
     stopCommand,
     loopCommand,

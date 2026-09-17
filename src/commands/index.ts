@@ -1,8 +1,10 @@
 import { playCommand } from "./play.js";
 import {
+  clearCommand,
   loopCommand,
   pauseCommand,
   previousCommand,
+  removeCommand,
   resumeCommand,
   seekCommand,
   shuffleCommand,
@@ -23,6 +25,8 @@ export const commands = [
   pauseCommand,
   resumeCommand,
   skipCommand,
+  removeCommand,
+  clearCommand,
   previousCommand,
   stopCommand,
   loopCommand,

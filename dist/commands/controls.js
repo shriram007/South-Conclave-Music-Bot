@@ -174,3 +174,56 @@ export const seekCommand = {
         return interaction.reply(`⏩ Jumped to **${formatDuration(targetMs)}**`);
     },
 };
+export const removeCommand = {
+    data: new SlashCommandBuilder()
+        .setName("remove")
+        .setDescription("Remove a specific track from the queue by its number")
+        .addIntegerOption((opt) => opt
+        .setName("position")
+        .setDescription("The track number shown in /queue to remove (e.g. 1, 2, 3)")
+        .setRequired(true)
+        .setMinValue(1)),
+    async execute(interaction) {
+        const player = await getPlayerWithGate(interaction);
+        if (!player)
+            return;
+        const tracks = player.queue.tracks;
+        if (tracks.length === 0) {
+            return interaction.reply({
+                content: "❌ The queue is empty! There are no upcoming songs to remove.",
+                ephemeral: true,
+            });
+        }
+        const pos = interaction.options.getInteger("position", true);
+        if (pos > tracks.length) {
+            return interaction.reply({
+                content: `❌ Invalid position! The queue currently has **${tracks.length}** song(s). Use \`/queue\` to check track numbers.`,
+                ephemeral: true,
+            });
+        }
+        const removedTrack = tracks[pos - 1];
+        await player.queue.remove(pos - 1);
+        await updateActivePlayerMessage(player);
+        return interaction.reply(`🗑️ Removed **#${pos} [${removedTrack.info.title}](${removedTrack.info.uri})** from the queue.`);
+    },
+};
+export const clearCommand = {
+    data: new SlashCommandBuilder()
+        .setName("clear")
+        .setDescription("Clear all upcoming tracks from the queue without stopping current song"),
+    async execute(interaction) {
+        const player = await getPlayerWithGate(interaction);
+        if (!player)
+            return;
+        const count = player.queue.tracks.length;
+        if (count === 0) {
+            return interaction.reply({
+                content: "⚠️ The queue is already empty!",
+                ephemeral: true,
+            });
+        }
+        await player.queue.splice(0, count);
+        await updateActivePlayerMessage(player);
+        return interaction.reply(`🧹 Cleared **${count}** song(s) from the queue.`);
+    },
+};

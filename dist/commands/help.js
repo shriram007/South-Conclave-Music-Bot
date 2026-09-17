@@ -20,6 +20,8 @@ export const helpCommand = {
                     "`/pause` — Pause current audio stream\n" +
                     "`/resume` — Resume playback\n" +
                     "`/skip` — Skip to next song\n" +
+                    "`/remove <position>` — Remove a specific song from the queue by its number\n" +
+                    "`/clear` — Clear all upcoming songs from the queue\n" +
                     "`/previous` — Replay previous song from history\n" +
                     "`/stop` — Clear queue and leave voice channel\n" +
                     "`/seek <time>` — Jump to timestamp (e.g. `1:45`)\n" +
