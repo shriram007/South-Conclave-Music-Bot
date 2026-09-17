@@ -3,7 +3,15 @@ import {
   SlashCommandBuilder,
   TextChannel,
 } from "discord.js";
-import { activePlayerMessages, discordClient, lavalink, updateActivePlayerMessage, validateVoiceGate } from "../lavalink/client.js";
+import {
+  activePlayerMessages,
+  discordClient,
+  lavalink,
+  smoothFadePause,
+  smoothFadeResume,
+  updateActivePlayerMessage,
+  validateVoiceGate,
+} from "../lavalink/client.js";
 import { RepeatMode } from "lavalink-client";
 import { autoDeleteReply } from "../utils/cleanup.js";
 import { formatDuration } from "../utils/formatters.js";
@@ -34,9 +42,9 @@ export const pauseCommand = {
       return interaction.reply({ content: "⚠️ Playback is already paused! Use `/resume` to unpause.", ephemeral: true });
     }
 
-    await player.pause();
+    await smoothFadePause(player);
     await updateActivePlayerMessage(player, true);
-    await interaction.reply("⏸️ Playback paused.");
+    await interaction.reply("⏸️ Playback paused (smooth fade-out).");
     autoDeleteReply(interaction, 8000);
   },
 };
@@ -51,9 +59,9 @@ export const resumeCommand = {
       return interaction.reply({ content: "⚠️ Playback is already playing!", ephemeral: true });
     }
 
-    await player.resume();
+    await smoothFadeResume(player);
     await updateActivePlayerMessage(player, true);
-    await interaction.reply("▶️ Playback resumed.");
+    await interaction.reply("▶️ Playback resumed (smooth fade-in).");
     autoDeleteReply(interaction, 8000);
   },
 };

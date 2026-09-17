@@ -17,8 +17,8 @@ export const helpCommand = {
             {
                 name: "▶️ Playback Commands",
                 value: "`/play <query>` — Play any song, album, or playlist (Spotify / Apple Music / YT / JioSaavn)\n" +
-                    "`/pause` — Pause current audio stream\n" +
-                    "`/resume` — Resume playback\n" +
+                    "`/pause` — Pause current audio stream (smooth fade-out)\n" +
+                    "`/resume` — Resume playback (smooth fade-in)\n" +
                     "`/skip` — Skip to next song\n" +
                     "`/remove <position>` — Remove a specific song from the queue by its number\n" +
                     "`/clear` — Clear all upcoming songs from the queue\n" +
@@ -27,14 +27,16 @@ export const helpCommand = {
                     "`/seek <time>` — Jump to timestamp (e.g. `1:45`)\n" +
                     "`/volume <0-200>` — Fine volume adjustment\n" +
                     "`/loop <mode>` — Set loop mode (off, track, queue)\n" +
-                    "`/shuffle` — Randomize queue order",
+                    "`/shuffle` — Randomize queue order\n" +
+                    "`/autoplay [mode]` — Spotify-style infinite radio when queue ends\n" +
+                    "`/favorites <play|list|clear>` — Play or manage your saved personal favorites",
             },
             {
                 name: "🎛️ Audiophile & Information Commands",
                 value: "`/filter <preset>` — Studio Hi-Fi EQ, Bass Boost, Treble, 8D, Nightcore, Vaporwave\n" +
                     "`/quality` — Check current voice channel bitrate & audio pipeline specs\n" +
                     "`/queue [page]` — View upcoming queued songs and total time\n" +
-                    "`/nowplaying` — Show interactive controller card with buttons\n" +
+                    "`/nowplaying` — Show interactive Spotify-style controller card\n" +
                     "`/lyrics [song]` — Look up lyrics for current song or any title\n" +
                     "`/help` — Show this guide",
             },

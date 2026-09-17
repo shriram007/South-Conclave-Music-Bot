@@ -4,13 +4,15 @@ import { commands } from "../commands/index.js";
 import { lavalink } from "../lavalink/client.js";
 import { loadPrefixes } from "../utils/prefixes.js";
 import { load247, rejoin247Channels } from "../utils/twentyFourSeven.js";
+import { loadFavorites } from "../utils/favorites.js";
 export async function onReady(client) {
     if (!client.user)
         return;
     console.log(`[Bot] Logged in as ${client.user.tag} (ID: ${client.user.id})`);
-    // Load server prefixes and 24/7 configurations
+    // Load server prefixes, 24/7 configurations, and personal favorites
     loadPrefixes();
     load247();
+    loadFavorites();
     // Set rich bot activity
     client.user.setPresence({
         activities: [

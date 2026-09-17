@@ -10,6 +10,8 @@ import { twentyFourSevenCommand } from "./twentyFourSeven.js";
 import { lyricsCommand } from "./lyrics.js";
 import { cleanCommand } from "./clean.js";
 import { pingCommand } from "./ping.js";
+import { favoritesCommand } from "./favorites.js";
+import { autoplayCommand } from "./autoplay.js";
 export const commands = [
     playCommand,
     pauseCommand,
@@ -30,6 +32,8 @@ export const commands = [
     qualityCommand,
     helpCommand,
     cleanCommand,
+    favoritesCommand,
+    autoplayCommand,
     pingCommand, // Hidden from /help command as requested
     // prefixCommand, // Hidden for now (requires Privileged Message Content Intent)
     twentyFourSevenCommand,

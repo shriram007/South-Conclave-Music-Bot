@@ -7,10 +7,17 @@ import {
 } from "discord.js";
 import { commandMap } from "../commands/index.js";
 import { fetchSongLyrics } from "../commands/lyrics.js";
-import { lavalink, updateActivePlayerMessage, validateVoiceGate } from "../lavalink/client.js";
+import {
+  lavalink,
+  smoothFadePause,
+  smoothFadeResume,
+  updateActivePlayerMessage,
+  validateVoiceGate,
+} from "../lavalink/client.js";
 import { buildPlayerMessage } from "../lavalink/playerUI.js";
 import { autoDeleteMessage } from "../utils/cleanup.js";
 import { EQ_PRESETS } from "../utils/equalizer.js";
+import { toggleFavorite } from "../utils/favorites.js";
 import { formatDuration } from "../utils/formatters.js";
 
 export async function handleInteraction(interaction: Interaction) {
@@ -107,9 +114,9 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
       case "player_pause_resume": {
         console.log(`[Button: Pause/Resume] BEFORE: paused=${player.paused} | Song: "${player.queue.current?.info.title}" | Pos: ${player.position}ms`);
         if (player.paused) {
-          await player.resume();
+          await smoothFadeResume(player);
         } else {
-          await player.pause();
+          await smoothFadePause(player);
         }
         console.log(`[Button: Pause/Resume] AFTER: paused=${player.paused} | Song: "${player.queue.current?.info.title}"`);
         await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
@@ -364,6 +371,55 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
 
         if (res.artworkUrl) embed.setThumbnail(res.artworkUrl);
         return interaction.editReply({ embeds: [embed] });
+      }
+
+      case "player_like": {
+        const current = player.queue.current;
+        if (!current) {
+          await interaction.followUp({ content: "⚠️ No song is currently playing to like!", ephemeral: true }).catch(() => {});
+          break;
+        }
+
+        const res = toggleFavorite(interaction.user.id, {
+          title: current.info.title,
+          uri: current.info.uri || "",
+          author: (current.info.author || "Unknown Artist").replace(/- Topic/gi, "").trim(),
+          duration: current.info.duration || 0,
+          artworkUrl: current.info.artworkUrl || undefined,
+        });
+
+        await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
+
+        const noticeContent = res.added
+          ? `❤️ Added **[${current.info.title}](${current.info.uri})** to your favorites! (${res.total} total) • Use \`/favorites play\` anytime.`
+          : `💔 Removed **[${current.info.title}](${current.info.uri})** from your favorites.`;
+
+        if (interaction.channel && "send" in interaction.channel) {
+          const notice = await (interaction.channel as any).send({
+            content: `${noticeContent} (by **${interaction.user.username}**)`,
+          }).catch(() => null);
+          if (notice) autoDeleteMessage(notice, 6000);
+        }
+        break;
+      }
+
+      case "player_autoplay": {
+        const currentAutoplay = Boolean(player.getData("autoplay") ?? true);
+        const newAutoplay = !currentAutoplay;
+        player.setData("autoplay", newAutoplay);
+        await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
+
+        const noticeText = newAutoplay
+          ? "📻 **Smart Autoplay ON:** Infinite Spotify Radio mode will continue when queue ends."
+          : "⏸️ **Smart Autoplay OFF:** Playback will stop when queue ends.";
+
+        if (interaction.channel && "send" in interaction.channel) {
+          const notice = await (interaction.channel as any).send({
+            content: `${noticeText} (by **${interaction.user.username}**)`,
+          }).catch(() => null);
+          if (notice) autoDeleteMessage(notice, 6000);
+        }
+        break;
       }
 
       default:

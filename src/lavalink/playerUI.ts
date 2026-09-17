@@ -15,13 +15,13 @@ export interface PlayerMessagePayload {
 }
 
 /**
- * Builds the interactive player message with embed, action buttons, and sound filter select menu
+ * Builds the interactive Spotify / Flavi player message
  */
 export function buildPlayerMessage(player: Player, track?: Track | null): PlayerMessagePayload {
   const current = track || player.queue.current;
   if (!current) {
     const emptyEmbed = new EmbedBuilder()
-      .setColor(0x2b2d31)
+      .setColor(0x121212)
       .setDescription("🎵 No song currently playing.");
     return { embeds: [emptyEmbed], components: [] };
   }
@@ -30,8 +30,7 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
   const position = player.position || 0;
   const duration = current.info.duration || 0;
   const isPaused = player.paused;
-  const isSeekable = Boolean(current.info.isSeekable !== false && duration > 0);
-  const progressBar = createProgressBar(position, duration, 16, isPaused);
+  const progressBar = createProgressBar(position, duration, 15, isPaused);
 
   const loopModeDisplay =
     player.repeatMode === "track"
@@ -42,15 +41,17 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
 
   const loopButtonLabel =
     player.repeatMode === "track"
-      ? "Loop: Track"
+      ? "Loop: 1"
       : player.repeatMode === "queue"
-      ? "Loop: Queue"
-      : "Loop: Off";
+      ? "Loop: All"
+      : "Loop";
 
   const volume = player.volume;
   const isFilterActive = Boolean(player.getData("hifi_active"));
   const activePresetKey = (player.getData("filter_preset_key") as string) || (isFilterActive ? "hifi" : "reset");
-  const eqPreset = (player.getData("eq_preset") as string) || (isFilterActive ? "💎 Hi-Fi Studio" : "Normal (Flat)");
+  const eqPreset = (player.getData("eq_preset") as string) || (isFilterActive ? "💎 Hi-Fi Studio" : "Flat (Pure)");
+
+  const isAutoplay = Boolean(player.getData("autoplay") ?? true);
 
   const requester = current.requester as any;
   const requesterId = requester?.id || (current.userData as any)?.userId || (typeof requester === "string" ? requester : null);
@@ -58,39 +59,41 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
 
   const botAvatar = discordClient?.user?.displayAvatarURL({ extension: "png", size: 128 });
 
-  // Dynamic header status
-  let statusHeader = isPaused ? "⏸️ Paused" : "Now playing";
+  // Dynamic Spotify-inspired status pill
+  let statusBadge = isPaused ? "⏸️ PAUSED" : "🟢 NOW PLAYING";
   const speed = player.filterManager?.data?.timescale?.speed || 1.0;
   if (!isPaused && speed > 1.1) {
-    statusHeader = `Now playing (🏎️ ${speed}x Turbo)`;
+    statusBadge = `🏎️ PLAYING (${speed}x TURBO)`;
   } else if (!isPaused && activePresetKey === "nightcore") {
-    statusHeader = "Now playing (⚡ Nightcore)";
+    statusBadge = "⚡ NIGHTCORE ACTIVE";
   } else if (!isPaused && activePresetKey === "8d") {
-    statusHeader = "Now playing (🎧 8D Audio)";
+    statusBadge = "🎧 8D SURROUND ACTIVE";
   }
 
   const queueCount = player.queue.tracks.length;
   const safeTitle = current.info.title.substring(0, 200).replace(/\[/g, "\\[").replace(/\]/g, "\\]");
+  const author = (current.info.author || "Unknown Artist").replace(/- Topic/gi, "").trim();
   const vcMention = player.voiceChannelId ? `<#${player.voiceChannelId}>` : "Voice Channel";
 
-  // Flavi-inspired sleek layout
+  // Spotify Brand Green: 0x1db954, or source color
+  const embedColor = source.name.toLowerCase().includes("spotify") ? 0x1db954 : (source.color || 0x1db954);
+
   const embed = new EmbedBuilder()
-    .setColor(source.color)
+    .setColor(embedColor)
     .setAuthor({
-      name: statusHeader,
+      name: `${statusBadge} • ${source.name.toUpperCase()}`,
       ...(botAvatar ? { iconURL: botAvatar } : {}),
       url: current.info.uri || undefined,
     })
     .setDescription(
-      `## [${safeTitle}](${current.info.uri || "https://discord.com"})\n\n` +
-      `• **Added by:** ${requesterDisplay}\n` +
-      `• **Voice Channel:** ${vcMention}\n` +
-      `• **Fidelity:** ${source.badge}\n\n` +
-      `Queue Size: **${queueCount}** · Volume: **${volume}%** · Loop: **${loopModeDisplay}** · Preset: **${eqPreset}**\n\n` +
-      `${progressBar}`
+      `## [${safeTitle}](${current.info.uri || "https://discord.com"})\n` +
+      `**Artist:** \`${author}\` · **Fidelity:** ${source.badge}\n\n` +
+      `${progressBar}\n\n` +
+      `📻 **Autoplay:** \`${isAutoplay ? "ON" : "OFF"}\` · 🔁 **Loop:** \`${loopModeDisplay}\` · 🎚️ **Vol:** \`${volume}%\` · 💎 **EQ:** \`${eqPreset}\`\n` +
+      `👤 **Requested by:** ${requesterDisplay} · **Channel:** ${vcMention}`
     )
     .setFooter({
-      text: "💎 South Conclave Audiophile Engine • Live Interactive Player",
+      text: `Queue: ${queueCount} upcoming • South Conclave Spotify Player`,
     })
     .setTimestamp();
 
@@ -98,7 +101,7 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
     embed.setThumbnail(current.info.artworkUrl);
   }
 
-  // Row 1: Core playback & navigation (Prev, Play/Pause, Skip, Loop, Shuffle)
+  // Row 1: Spotify Core Playback Controls (Prev, Play/Pause, Skip, Loop, Shuffle)
   const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId("player_prev")
@@ -129,32 +132,28 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
       .setDisabled(queueCount < 2)
   );
 
-  // Row 2: 10s Seek Controls, Volume, and Stop
+  // Row 2: Spotify App Utilities (Like, Autoplay Radio, Hi-Fi EQ, Lyrics, Stop)
   const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
-      .setCustomId("player_rewind_10")
-      .setEmoji("⏪")
-      .setLabel("-10s")
-      .setStyle(ButtonStyle.Secondary)
-      .setDisabled(!isSeekable),
+      .setCustomId("player_like")
+      .setEmoji("❤️")
+      .setLabel("Like")
+      .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
-      .setCustomId("player_forward_10")
-      .setEmoji("⏩")
-      .setLabel("+10s")
-      .setStyle(ButtonStyle.Secondary)
-      .setDisabled(!isSeekable),
+      .setCustomId("player_autoplay")
+      .setEmoji("📻")
+      .setLabel(`Autoplay: ${isAutoplay ? "ON" : "OFF"}`)
+      .setStyle(isAutoplay ? ButtonStyle.Success : ButtonStyle.Secondary),
     new ButtonBuilder()
-      .setCustomId("player_voldown")
-      .setEmoji("🔉")
-      .setLabel("-10%")
-      .setStyle(ButtonStyle.Secondary)
-      .setDisabled(volume <= 0),
+      .setCustomId("player_hifieq")
+      .setEmoji("💎")
+      .setLabel("Hi-Fi EQ")
+      .setStyle(isFilterActive ? ButtonStyle.Success : ButtonStyle.Secondary),
     new ButtonBuilder()
-      .setCustomId("player_volup")
-      .setEmoji("🔊")
-      .setLabel("+10%")
-      .setStyle(ButtonStyle.Secondary)
-      .setDisabled(volume >= 200),
+      .setCustomId("player_lyrics")
+      .setEmoji("📜")
+      .setLabel("Lyrics")
+      .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId("player_stop")
       .setEmoji("⏹️")
@@ -162,54 +161,23 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
       .setStyle(ButtonStyle.Danger)
   );
 
-  // Row 3: 30s Seek Controls & Overlays (Queue, Lyrics, Quick Hi-Fi EQ)
-  const row3 = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId("player_rewind_30")
-      .setEmoji("⏪")
-      .setLabel("-30s")
-      .setStyle(ButtonStyle.Secondary)
-      .setDisabled(!isSeekable),
-    new ButtonBuilder()
-      .setCustomId("player_forward_30")
-      .setEmoji("⏩")
-      .setLabel("+30s")
-      .setStyle(ButtonStyle.Secondary)
-      .setDisabled(!isSeekable),
-    new ButtonBuilder()
-      .setCustomId("player_queue")
-      .setEmoji("📋")
-      .setLabel(`Queue (${queueCount})`)
-      .setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder()
-      .setCustomId("player_lyrics")
-      .setEmoji("📜")
-      .setLabel("Lyrics")
-      .setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder()
-      .setCustomId("player_hifieq")
-      .setEmoji("💎")
-      .setLabel("Hi-Fi")
-      .setStyle(isFilterActive ? ButtonStyle.Success : ButtonStyle.Secondary)
-  );
-
-  // Row 4: Interactive Sound Filter / EQ Select Menu (with active preset marked default)
+  // Row 3: Interactive Sound Filter & Equalizer Select Menu
   const filterOptions = [
-    { label: "Hi-Fi Studio (Audiophile Sparkle)", value: "hifi", emoji: "💎", description: "Studio clarity & dynamics" },
-    { label: "Bass Boost", value: "bassboost", emoji: "🔊", description: "Punchy deep sub-bass" },
-    { label: "Turbo Rush (1.35x)", value: "turbo", emoji: "🏎️", description: "High-tempo workout/gaming boost" },
+    { label: "Hi-Fi Studio (Audiophile Sparkle)", value: "hifi", emoji: "💎", description: "Studio clarity, sparkle & dynamics" },
+    { label: "Bass Boost (Deep Punch)", value: "bassboost", emoji: "🔊", description: "Rich, punchy sub-bass boost" },
+    { label: "8D Audio (360° Surround)", value: "8d", emoji: "🎧", description: "Rotating binaural spatial sound" },
+    { label: "Nightcore (Speed & Pitch)", value: "nightcore", emoji: "⚡", description: "Fast tempo & pitch uplift" },
+    { label: "Vaporwave (Slowed & Reverb)", value: "vaporwave", emoji: "🌊", description: "Slowed, chilled aesthetic" },
+    { label: "Turbo Rush (1.35x Workout)", value: "turbo", emoji: "🏎️", description: "High-tempo gaming/workout boost" },
     { label: "Vocal / Treble Boost", value: "treble", emoji: "🎤", description: "Crisp acoustic highs & clarity" },
-    { label: "8D Audio", value: "8d", emoji: "🎧", description: "Rotating 360° binaural immersion" },
-    { label: "Nightcore", value: "nightcore", emoji: "⚡", description: "Fast tempo & pitch boost" },
-    { label: "Vaporwave", value: "vaporwave", emoji: "🌊", description: "Slowed & relaxed aesthetic" },
     { label: "Karaoke (Sing-Along)", value: "karaoke", emoji: "🎤", description: "Suppresses vocals for sing-along" },
-    { label: "Reset to Flat / Pure Audio", value: "reset", emoji: "🔄", description: "Pristine lossless studio audio" },
+    { label: "Flat / Pure Audio (Reset)", value: "reset", emoji: "🔄", description: "Pristine untouched lossless master" },
   ].map((opt) => ({
     ...opt,
     default: opt.value === activePresetKey,
   }));
 
-  const row4 = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+  const row3 = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId("player_filter_menu")
       .setPlaceholder("🎛️ Select Sound Filter or Equalizer Preset...")
@@ -218,6 +186,6 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
 
   return {
     embeds: [embed],
-    components: [row1, row2, row3, row4],
+    components: [row1, row2, row3],
   };
 }

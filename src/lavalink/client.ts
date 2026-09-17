@@ -102,6 +102,8 @@ export function initLavalink(client: Client) {
 
   function startLivePlayerTicker(player: Player) {
     stopLivePlayerTicker(player.guildId);
+    let preloadedTrackId: string | null = null;
+
     const ticker = setInterval(async () => {
       try {
         if (!player.connected || !player.queue.current) {
@@ -109,6 +111,20 @@ export function initLavalink(client: Client) {
           return;
         }
         if (player.paused) return;
+
+        // Gapless Preload: When current track has < 12 seconds remaining, pre-resolve next track
+        const remaining = (player.queue.current.info.duration || 0) - (player.position || 0);
+        if (remaining > 0 && remaining <= 12000 && player.queue.tracks.length > 0) {
+          const nextTrack = player.queue.tracks[0];
+          if (nextTrack && nextTrack.info.identifier !== preloadedTrackId) {
+            preloadedTrackId = nextTrack.info.identifier || null;
+            if (typeof (nextTrack as any).resolve === "function") {
+              console.log(`[Gapless Preloader] Preloading next track "${nextTrack.info.title}" for 0ms transition...`);
+              (nextTrack as any).resolve(lavalink).catch(() => {});
+            }
+          }
+        }
+
         await updateActivePlayerMessage(player);
       } catch {}
     }, 3500);
@@ -173,17 +189,60 @@ export function initLavalink(client: Client) {
     stopLivePlayerTicker(player.guildId);
     if (!player.textChannelId) return;
     const channel = client.channels.cache.get(player.textChannelId) as TextChannel | undefined;
+
+    // Smart Autoplay (Spotify Radio Mode)
+    const isAutoplay = Boolean(player.getData("autoplay") ?? true);
+    if (isAutoplay && player.queue.previous.length > 0) {
+      const lastTrack = player.queue.previous[0];
+      const rawTitle = lastTrack.info.title || "";
+      const rawAuthor = (lastTrack.info.author || "").replace(/- Topic/gi, "").trim();
+      const cleanTitle = rawTitle.replace(/\|.*/, "").replace(/\[.*?\]/g, "").replace(/\(.*?\)/g, "").trim();
+
+      console.log(`[Smart Autoplay] Queue ended. Finding recommendation based on "${cleanTitle}" by "${rawAuthor}"...`);
+
+      const targetNode = lavalink.nodeManager.nodes.get("Serenetia-HighSpeed") || player.node;
+      const historyIds = new Set(player.queue.previous.map((t) => t.info.identifier));
+
+      try {
+        let recRes = await targetNode.search({ query: `${rawAuthor} ${cleanTitle} radio`, source: "ytmsearch" }, lastTrack.requester);
+        if (!recRes?.tracks?.length || recRes.loadType === "empty" || recRes.loadType === "error") {
+          recRes = await targetNode.search({ query: `${rawAuthor} top songs`, source: "ytmsearch" }, lastTrack.requester);
+        }
+
+        if (recRes?.tracks?.length) {
+          const candidate = recRes.tracks.find(
+            (t) => !historyIds.has(t.info.identifier) && !restrictedTrackIds.has(t.info.identifier)
+          );
+          if (candidate) {
+            console.log(`[Smart Autoplay] Autoplaying recommendation: "${candidate.info.title}"`);
+            candidate.requester = lastTrack.requester;
+            await player.queue.add(candidate);
+            await player.play();
+
+            if (channel) {
+              channel.send({
+                content: `📻 **Autoplay Radio:** Playing similar song **[${candidate.info.title}](${candidate.info.uri})**`,
+              }).then((msg) => autoDeleteMessage(msg, 6000)).catch(() => {});
+            }
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn("[Smart Autoplay] Failed to find recommendation:", err);
+      }
+    }
+
     if (channel) {
       const is247 = is247Enabled(player.guildId);
       const prevMessageId = activePlayerMessages.get(player.guildId) || (player.getData("active_message_id") as string | undefined);
 
       const queueFinishedEmbed = new EmbedBuilder()
-        .setColor(0x5865f2)
+        .setColor(0x1db954)
         .setTitle("🎶 Queue Finished")
         .setDescription(
           is247
-            ? "✨ All tracks finished playing. Staying **24/7** in voice channel!\n\nUse `/play <song>` to queue more music."
-            : "✨ All tracks finished playing. Use `/play <song>` to start jamming again!"
+            ? "✨ All tracks finished playing. Staying **24/7** in voice channel!\n\nUse `/play <song>` or enable `/autoplay` to keep music flowing."
+            : "✨ All tracks finished playing. Use `/play <song>` or enable `/autoplay` to keep music flowing!"
         )
         .setFooter({ text: "💎 South Conclave Audiophile Engine" })
         .setTimestamp();
@@ -634,5 +693,41 @@ export async function validateVoiceGate(
 
   return { allowed: true };
 }
+
+/**
+ * Smooth Volume Fade Out before pausing to avoid speaker popping
+ */
+export async function smoothFadePause(player: Player): Promise<void> {
+  const originalVolume = player.volume;
+  player.setData("pre_pause_volume", originalVolume);
+  try {
+    if (originalVolume > 15) {
+      await player.setVolume(Math.round(originalVolume * 0.5)).catch(() => {});
+      await new Promise((r) => setTimeout(r, 60));
+      await player.setVolume(Math.round(originalVolume * 0.15)).catch(() => {});
+      await new Promise((r) => setTimeout(r, 60));
+    }
+  } catch {}
+  await player.pause();
+  await player.setVolume(originalVolume).catch(() => {});
+}
+
+/**
+ * Smooth Volume Fade In upon resuming to provide an audiophile ramp-up
+ */
+export async function smoothFadeResume(player: Player): Promise<void> {
+  const targetVolume = (player.getData("pre_pause_volume") as number) || player.volume || 100;
+  try {
+    await player.setVolume(Math.max(5, Math.round(targetVolume * 0.15))).catch(() => {});
+  } catch {}
+  await player.resume();
+  try {
+    await new Promise((r) => setTimeout(r, 60));
+    await player.setVolume(Math.max(10, Math.round(targetVolume * 0.55))).catch(() => {});
+    await new Promise((r) => setTimeout(r, 60));
+    await player.setVolume(targetVolume).catch(() => {});
+  } catch {}
+}
+
 
 
