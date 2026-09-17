@@ -1,6 +1,7 @@
 import { EmbedBuilder, SlashCommandBuilder, } from "discord.js";
 import { getOrCreatePlayer, lavalink, restrictedTrackIds, updateActivePlayerMessage } from "../lavalink/client.js";
 import { autoDeleteReply } from "../utils/cleanup.js";
+import { getFavorites } from "../utils/favorites.js";
 import { formatDuration, getSourceInfo, isRelevantTrack } from "../utils/formatters.js";
 async function resolveSpotifyTrack(url) {
     try {
@@ -167,53 +168,110 @@ export const playCommand = {
         .setAutocomplete(true)),
     async autocomplete(interaction) {
         const focusedValue = interaction.options.getFocused();
-        if (!focusedValue || focusedValue.trim().length < 2) {
-            return interaction.respond([]);
+        const trimmed = (focusedValue || "").trim();
+        const userId = interaction.user.id;
+        // Case 1: Empty or very short input -> Immediately return user favorites + trending tracks
+        if (!trimmed || trimmed.length < 1) {
+            const choices = [];
+            // 1. User's saved favorites first
+            const favs = getFavorites(userId).slice(0, 4);
+            for (const f of favs) {
+                choices.push({
+                    name: `❤️ Liked: ${f.title.substring(0, 45)} - ${f.author.substring(0, 25)}`.substring(0, 100),
+                    value: f.uri || f.title,
+                });
+            }
+            // 2. Global trending songs
+            const trending = [
+                "The Weeknd - Starboy",
+                "Lady Gaga, Bruno Mars - Die With A Smile",
+                "Billie Eilish - Birds of a Feather",
+                "Post Malone, Swae Lee - Sunflower",
+                "Ed Sheeran - Shape of You",
+                "Coldplay - Viva La Vida",
+            ];
+            for (const t of trending) {
+                if (choices.length >= 10)
+                    break;
+                choices.push({
+                    name: `🔥 Trending: ${t}`.substring(0, 100),
+                    value: t,
+                });
+            }
+            return interaction.respond(choices).catch(() => { });
         }
-        const trimmed = focusedValue.trim();
+        // Direct URLs don't need autocomplete
         if (/^https?:\/\//i.test(trimmed)) {
-            return interaction.respond([]);
+            return interaction.respond([]).catch(() => { });
         }
         try {
-            const nodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected);
-            if (nodes.length === 0)
-                return interaction.respond([]);
-            let res = null;
-            for (const node of nodes) {
+            const choices = [];
+            // Priority 1: Match against user's saved favorites
+            const matchedFavs = getFavorites(userId)
+                .filter((f) => f.title.toLowerCase().includes(trimmed.toLowerCase()) || f.author.toLowerCase().includes(trimmed.toLowerCase()))
+                .slice(0, 3);
+            for (const f of matchedFavs) {
+                choices.push({
+                    name: `❤️ ${f.title.substring(0, 45)} - ${f.author.substring(0, 25)} [Liked]`.substring(0, 100),
+                    value: f.uri || f.title,
+                });
+            }
+            // Priority 2: Ultra-low latency YouTube Suggest API (~40ms response)
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 1200);
+                const resp = await fetch(`https://suggestqueries.google.com/complete/search?client=firefox&ds=yt&q=${encodeURIComponent(trimmed)}`, { signal: controller.signal });
+                clearTimeout(timeoutId);
+                if (resp.ok) {
+                    const data = (await resp.json());
+                    if (Array.isArray(data[1])) {
+                        for (const item of data[1]) {
+                            if (choices.length >= 8)
+                                break;
+                            if (!choices.some((c) => c.value.toLowerCase() === item.toLowerCase())) {
+                                choices.push({
+                                    name: `🎵 ${item}`.substring(0, 100),
+                                    value: item,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
+            // Priority 3: Fast Lavalink node track lookup (bounded to strict 700ms race)
+            if (choices.length < 8) {
                 try {
-                    res = await node.search({ query: trimmed, source: "ytmsearch" }, interaction.user);
-                    if (res?.tracks?.length)
-                        break;
+                    const serenetia = lavalink.nodeManager.nodes.get("Serenetia-HighSpeed");
+                    const connectedNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected);
+                    const nodeToUse = serenetia?.connected ? serenetia : connectedNodes[0];
+                    if (nodeToUse) {
+                        const searchPromise = nodeToUse.search({ query: trimmed, source: "ytmsearch" }, interaction.user);
+                        const timeoutPromise = new Promise((r) => setTimeout(() => r(null), 700));
+                        const res = await Promise.race([searchPromise, timeoutPromise]);
+                        if (res?.tracks?.length) {
+                            for (const t of res.tracks.slice(0, 4)) {
+                                if (choices.length >= 10)
+                                    break;
+                                const title = t.info.title.substring(0, 45);
+                                const author = t.info.author ? ` - ${t.info.author.substring(0, 25)}` : "";
+                                const duration = t.info.duration ? ` [${formatDuration(t.info.duration)}]` : "";
+                                const label = `🎶 ${title}${author}${duration}`.substring(0, 100);
+                                const val = t.info.uri || t.info.title;
+                                if (!choices.some((c) => c.value === val)) {
+                                    choices.push({ name: label, value: val });
+                                }
+                            }
+                        }
+                    }
                 }
                 catch { }
             }
-            if (!res?.tracks?.length) {
-                for (const node of nodes) {
-                    try {
-                        res = await node.search({ query: trimmed, source: "ytsearch" }, interaction.user);
-                        if (res?.tracks?.length)
-                            break;
-                    }
-                    catch { }
-                }
-            }
-            if (!res || !res.tracks || res.tracks.length === 0) {
-                return interaction.respond([]);
-            }
-            const tracks = res.tracks.slice(0, 8);
-            const choices = tracks.map((t) => {
-                const title = t.info.title.substring(0, 50);
-                const author = t.info.author ? ` - ${t.info.author.substring(0, 25)}` : "";
-                const duration = t.info.duration ? ` [${formatDuration(t.info.duration)}]` : "";
-                const label = `${title}${author}${duration}`.substring(0, 100);
-                return {
-                    name: label,
-                    value: t.info.uri || t.info.title,
-                };
-            });
-            await interaction.respond(choices);
+            await interaction.respond(choices.slice(0, 10));
         }
         catch (e) {
+            if (e?.code === 10062 || e?.rawError?.code === 10062)
+                return;
             await interaction.respond([]).catch(() => { });
         }
     },

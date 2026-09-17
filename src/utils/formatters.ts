@@ -4,7 +4,7 @@ import { VoiceBasedChannel } from "discord.js";
  * Format milliseconds into MM:SS or HH:MM:SS format
  */
 export function formatDuration(ms: number): string {
-  if (!ms || ms <= 0 || isNaN(ms)) return "00:00";
+  if (!ms || ms <= 0 || isNaN(ms)) return "0:00";
   const seconds = Math.floor((ms / 1000) % 60);
   const minutes = Math.floor((ms / (1000 * 60)) % 60);
   const hours = Math.floor(ms / (1000 * 60 * 60));
@@ -12,9 +12,9 @@ export function formatDuration(ms: number): string {
   const pad = (n: number) => (n < 10 ? `0${n}` : `${n}`);
 
   if (hours > 0) {
-    return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+    return `${hours}:${pad(minutes)}:${pad(seconds)}`;
   }
-  return `${pad(minutes)}:${pad(seconds)}`;
+  return `${minutes}:${pad(seconds)}`;
 }
 
 /**
@@ -47,6 +47,39 @@ export function createProgressBar(
   const statusIcon = isPaused ? "⏸️" : "▶️";
   return `${statusIcon} \`${formatDuration(currentMs)}\` \`${bar}\` \`${formatDuration(totalMs)}\``;
 }
+
+/**
+ * Flavi-style clean progress slider (purple dot on sleek track with split timestamps)
+ */
+export function createFlaviProgressBar(
+  currentMs: number,
+  totalMs: number,
+  barLength: number = 22
+): string {
+  if (!totalMs || totalMs <= 0) {
+    return `🔴 \`LIVE STREAM\` \`[${formatDuration(currentMs)}]\``;
+  }
+
+  const progress = Math.min(Math.max(currentMs / totalMs, 0), 1);
+  const progressIndex = Math.min(Math.floor(progress * barLength), barLength - 1);
+
+  let bar = "";
+  for (let i = 0; i < barLength; i++) {
+    if (i === progressIndex) {
+      bar += "🟣";
+    } else {
+      bar += "─";
+    }
+  }
+
+  const currentStr = formatDuration(currentMs);
+  const totalStr = formatDuration(totalMs);
+  const spaceCount = Math.max(2, 38 - currentStr.length - totalStr.length);
+  const spaces = " ".repeat(spaceCount);
+
+  return `${bar}\n\`${currentStr}${spaces}${totalStr}\``;
+}
+
 
 /**
  * Return friendly badges and bitrate descriptions for various audio sources

@@ -6,7 +6,8 @@ import {
   StringSelectMenuBuilder,
 } from "discord.js";
 import { Player, Track } from "lavalink-client";
-import { createProgressBar, formatDuration, getSourceInfo } from "../utils/formatters.js";
+import { createFlaviProgressBar, formatDuration, getSourceInfo } from "../utils/formatters.js";
+import { isFavorite } from "../utils/favorites.js";
 import { discordClient } from "./client.js";
 
 export interface PlayerMessagePayload {
@@ -15,13 +16,13 @@ export interface PlayerMessagePayload {
 }
 
 /**
- * Builds the interactive Spotify / Flavi player message
+ * Builds the interactive player message matching FlaviBot layout
  */
 export function buildPlayerMessage(player: Player, track?: Track | null): PlayerMessagePayload {
   const current = track || player.queue.current;
   if (!current) {
     const emptyEmbed = new EmbedBuilder()
-      .setColor(0x121212)
+      .setColor(0x5865f2)
       .setDescription("🎵 No song currently playing.");
     return { embeds: [emptyEmbed], components: [] };
   }
@@ -30,7 +31,7 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
   const position = player.position || 0;
   const duration = current.info.duration || 0;
   const isPaused = player.paused;
-  const progressBar = createProgressBar(position, duration, 15, isPaused);
+  const progressBar = createFlaviProgressBar(position, duration, 24);
 
   const loopModeDisplay =
     player.repeatMode === "track"
@@ -39,17 +40,9 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
       ? "Queue"
       : "Off";
 
-  const loopButtonLabel =
-    player.repeatMode === "track"
-      ? "Loop: 1"
-      : player.repeatMode === "queue"
-      ? "Loop: All"
-      : "Loop";
-
   const volume = player.volume;
   const isFilterActive = Boolean(player.getData("hifi_active"));
   const activePresetKey = (player.getData("filter_preset_key") as string) || (isFilterActive ? "hifi" : "reset");
-  const eqPreset = (player.getData("eq_preset") as string) || (isFilterActive ? "💎 Hi-Fi Studio" : "Flat (Pure)");
 
   const isAutoplay = Boolean(player.getData("autoplay") ?? true);
 
@@ -57,43 +50,29 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
   const requesterId = requester?.id || (current.userData as any)?.userId || (typeof requester === "string" ? requester : null);
   const requesterDisplay = requesterId ? `<@${requesterId}>` : (requester?.username ? `@${requester.username}` : "Server Member");
 
-  const botAvatar = discordClient?.user?.displayAvatarURL({ extension: "png", size: 128 });
+  const isLiked = requesterId ? isFavorite(requesterId, current.info.uri) : false;
 
-  // Dynamic Spotify-inspired status pill
-  let statusBadge = isPaused ? "⏸️ PAUSED" : "🟢 NOW PLAYING";
-  const speed = player.filterManager?.data?.timescale?.speed || 1.0;
-  if (!isPaused && speed > 1.1) {
-    statusBadge = `🏎️ PLAYING (${speed}x TURBO)`;
-  } else if (!isPaused && activePresetKey === "nightcore") {
-    statusBadge = "⚡ NIGHTCORE ACTIVE";
-  } else if (!isPaused && activePresetKey === "8d") {
-    statusBadge = "🎧 8D SURROUND ACTIVE";
-  }
+  const botAvatar = discordClient?.user?.displayAvatarURL({ extension: "png", size: 128 });
 
   const queueCount = player.queue.tracks.length;
   const safeTitle = current.info.title.substring(0, 200).replace(/\[/g, "\\[").replace(/\]/g, "\\]");
-  const author = (current.info.author || "Unknown Artist").replace(/- Topic/gi, "").trim();
   const vcMention = player.voiceChannelId ? `<#${player.voiceChannelId}>` : "Voice Channel";
 
-  // Spotify Brand Green: 0x1db954, or source color
-  const embedColor = source.name.toLowerCase().includes("spotify") ? 0x1db954 : (source.color || 0x1db954);
-
+  // FlaviBot Accent: #5865F2 (Royal Blurple)
   const embed = new EmbedBuilder()
-    .setColor(embedColor)
-    .setAuthor({
-      name: `${statusBadge} • ${source.name.toUpperCase()}`,
-      ...(botAvatar ? { iconURL: botAvatar } : {}),
-      url: current.info.uri || undefined,
-    })
+    .setColor(0x5865f2)
     .setDescription(
+      `### Now playing\n` +
+      `────────────────────────────────────────\n` +
       `## [${safeTitle}](${current.info.uri || "https://discord.com"})\n` +
-      `**Artist:** \`${author}\` · **Fidelity:** ${source.badge}\n\n` +
-      `${progressBar}\n\n` +
-      `📻 **Autoplay:** \`${isAutoplay ? "ON" : "OFF"}\` · 🔁 **Loop:** \`${loopModeDisplay}\` · 🎚️ **Vol:** \`${volume}%\` · 💎 **EQ:** \`${eqPreset}\`\n` +
-      `👤 **Requested by:** ${requesterDisplay} · **Channel:** ${vcMention}`
+      `• **Added by** ${requesterDisplay}\n` +
+      `• 🔊 ${vcMention}\n\n` +
+      `Queue Size: \`${queueCount}\` · Volume: \`${volume}%\` · Loop: \`${loopModeDisplay}\`\n\n` +
+      `${progressBar}`
     )
     .setFooter({
-      text: `Queue: ${queueCount} upcoming • South Conclave Spotify Player`,
+      text: `South Conclave Audiophile Engine • Fidelity: ${source.name}`,
+      ...(botAvatar ? { iconURL: botAvatar } : {}),
     })
     .setTimestamp();
 
@@ -101,49 +80,42 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
     embed.setThumbnail(current.info.artworkUrl);
   }
 
-  // Row 1: Spotify Core Playback Controls (Prev, Play/Pause, Skip, Loop, Shuffle)
+  // Row 1: Primary Controls (Pause/Resume, Skip, Stop, Like) - Matching FlaviBot
   const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId("player_prev")
-      .setEmoji("⏮️")
-      .setLabel("Prev")
-      .setStyle(ButtonStyle.Secondary)
-      .setDisabled(player.queue.previous.length === 0),
     new ButtonBuilder()
       .setCustomId("player_pause_resume")
       .setEmoji(isPaused ? "▶️" : "⏸️")
       .setLabel(isPaused ? "Resume" : "Pause")
-      .setStyle(isPaused ? ButtonStyle.Success : ButtonStyle.Primary),
+      .setStyle(isPaused ? ButtonStyle.Success : ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId("player_skip")
       .setEmoji("⏭️")
       .setLabel("Skip")
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
-      .setCustomId("player_loop")
-      .setEmoji(player.repeatMode === "track" ? "🔂" : "🔁")
-      .setLabel(loopButtonLabel)
-      .setStyle(player.repeatMode !== "off" ? ButtonStyle.Success : ButtonStyle.Secondary),
-    new ButtonBuilder()
-      .setCustomId("player_shuffle")
-      .setEmoji("🔀")
-      .setLabel("Shuffle")
-      .setStyle(ButtonStyle.Secondary)
-      .setDisabled(queueCount < 2)
-  );
-
-  // Row 2: Spotify App Utilities (Like, Autoplay Radio, Hi-Fi EQ, Lyrics, Stop)
-  const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId("player_like")
-      .setEmoji("❤️")
-      .setLabel("Like")
+      .setCustomId("player_stop")
+      .setEmoji("⏹️")
+      .setLabel("Stop")
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
+      .setCustomId("player_like")
+      .setEmoji(isLiked ? "❤️" : "🤍")
+      .setLabel(isLiked ? "Liked" : "Like")
+      .setStyle(isLiked ? ButtonStyle.Success : ButtonStyle.Secondary)
+  );
+
+  // Row 2: Secondary Utilities (AutoPlay, Dashboard/Queue, Hi-Fi EQ, Lyrics, Prev)
+  const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
       .setCustomId("player_autoplay")
-      .setEmoji("📻")
-      .setLabel(`Autoplay: ${isAutoplay ? "ON" : "OFF"}`)
+      .setEmoji("🔄")
+      .setLabel(isAutoplay ? "AutoPlay: ON" : "AutoPlay")
       .setStyle(isAutoplay ? ButtonStyle.Success : ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId("player_queue")
+      .setEmoji("📋")
+      .setLabel(`Queue (${queueCount})`)
+      .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId("player_hifieq")
       .setEmoji("💎")
@@ -155,10 +127,11 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
       .setLabel("Lyrics")
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
-      .setCustomId("player_stop")
-      .setEmoji("⏹️")
-      .setLabel("Stop")
-      .setStyle(ButtonStyle.Danger)
+      .setCustomId("player_prev")
+      .setEmoji("⏮️")
+      .setLabel("Prev")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(player.queue.previous.length === 0)
   );
 
   // Row 3: Interactive Sound Filter & Equalizer Select Menu
@@ -189,3 +162,4 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
     components: [row1, row2, row3],
   };
 }
+
