@@ -15,7 +15,9 @@ export function initLavalink(client) {
     discordClient = client;
     lavalink = new LavalinkManager({
         nodes: [
-            ...(config.lavalink.host && config.lavalink.host !== "localhost"
+            ...(config.lavalink.host &&
+                config.lavalink.host !== "localhost" &&
+                !config.lavalink.host.includes("jirayu")
                 ? [
                     {
                         authorization: config.lavalink.password,
@@ -26,13 +28,6 @@ export function initLavalink(client) {
                     },
                 ]
                 : []),
-            {
-                authorization: "free",
-                host: "lavalink-v4.triniumhost.com",
-                port: 443,
-                secure: true,
-                id: "Trinium-FastNode",
-            },
             {
                 authorization: "https://seretia.link/discord",
                 host: "lavalinkv4.serenetia.com",
@@ -46,6 +41,13 @@ export function initLavalink(client) {
                 port: 443,
                 secure: true,
                 id: "Millo-BackupNode",
+            },
+            {
+                authorization: "free",
+                host: "lavalink-v4.triniumhost.com",
+                port: 443,
+                secure: true,
+                id: "Trinium-FastNode",
             },
         ],
         sendToShard: (guildId, payload) => {
@@ -252,14 +254,31 @@ export function initLavalink(client) {
                 const cleanAuthor = (track.info.author || "").replace(/- Topic/gi, "").trim();
                 const fallbackQuery = `${cleanTitle} ${cleanAuthor}`.trim();
                 console.log(`[Universal Recovery] Stream restricted for "${rawTitle}" (ID: ${failedId}). Attempt #${recoveryAttempts} auto-recovering as "${fallbackQuery}"...`);
-                // Prioritize current connected node FIRST to prevent transatlantic player migration churn!
-                const connectedNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected);
-                const otherNodes = connectedNodes.filter((n) => n.id !== player.node.id);
-                const nodesToTry = player.node.connected ? [player.node, ...otherNodes] : otherNodes;
+                // Prioritize Serenetia (verified working YouTube proxy) and healthy nodes
+                const connectedNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected && !n.id.includes("Custom"));
+                const serenetiaNode = connectedNodes.find((n) => n.id === "Serenetia-HighSpeed");
+                const otherNodes = connectedNodes.filter((n) => n.id !== (serenetiaNode?.id || player.node.id));
+                const nodesToTry = serenetiaNode ? [serenetiaNode, ...otherNodes] : (player.node.connected ? [player.node, ...otherNodes] : otherNodes);
                 let recoveredTrack = null;
                 let targetNode = player.node;
+                // On attempt #2+, immediately prioritize SoundCloud to bypass YouTube datacenter IP blocks completely
+                const trySoundCloudFirst = recoveryAttempts > 1;
                 for (const node of nodesToTry) {
                     try {
+                        if (trySoundCloudFirst) {
+                            const scRes = await node.search({ query: fallbackQuery, source: "scsearch" }, track.requester);
+                            if (scRes?.tracks?.length && scRes.loadType !== "empty" && scRes.loadType !== "error") {
+                                const scCandidate = scRes.tracks.find((t) => t.info.identifier !== failedId &&
+                                    !restrictedTrackIds.has(t.info.identifier) &&
+                                    isRelevantTrack(t.info.title, cleanTitle));
+                                if (scCandidate) {
+                                    recoveredTrack = scCandidate;
+                                    targetNode = node;
+                                    console.log(`[Universal Recovery] Found verified SoundCloud alternative on node "${node.id}": "${scCandidate.info.title}"`);
+                                    break;
+                                }
+                            }
+                        }
                         // Strategy 1: YouTube Music / YouTube Audio - Authentic studio track, excluding failed ID & checking title relevance
                         let ytRes = await node.search({ query: `${cleanTitle} audio`, source: "ytmsearch" }, track.requester);
                         if (!ytRes?.tracks?.length || ytRes.loadType === "empty" || ytRes.loadType === "error") {
@@ -277,16 +296,18 @@ export function initLavalink(client) {
                             }
                         }
                         // Strategy 2: SoundCloud (scsearch) with STRICT title matching (never accept unrelated DJ sets)
-                        const scRes = await node.search({ query: fallbackQuery, source: "scsearch" }, track.requester);
-                        if (scRes?.tracks?.length && scRes.loadType !== "empty" && scRes.loadType !== "error") {
-                            const scCandidate = scRes.tracks.find((t) => t.info.identifier !== failedId &&
-                                !restrictedTrackIds.has(t.info.identifier) &&
-                                isRelevantTrack(t.info.title, cleanTitle));
-                            if (scCandidate) {
-                                recoveredTrack = scCandidate;
-                                targetNode = node;
-                                console.log(`[Universal Recovery] Found verified SoundCloud alternative on node "${node.id}": "${scCandidate.info.title}"`);
-                                break;
+                        if (!trySoundCloudFirst) {
+                            const scRes = await node.search({ query: fallbackQuery, source: "scsearch" }, track.requester);
+                            if (scRes?.tracks?.length && scRes.loadType !== "empty" && scRes.loadType !== "error") {
+                                const scCandidate = scRes.tracks.find((t) => t.info.identifier !== failedId &&
+                                    !restrictedTrackIds.has(t.info.identifier) &&
+                                    isRelevantTrack(t.info.title, cleanTitle));
+                                if (scCandidate) {
+                                    recoveredTrack = scCandidate;
+                                    targetNode = node;
+                                    console.log(`[Universal Recovery] Found verified SoundCloud alternative on node "${node.id}": "${scCandidate.info.title}"`);
+                                    break;
+                                }
                             }
                         }
                     }
