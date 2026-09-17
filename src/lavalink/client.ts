@@ -28,12 +28,23 @@ export function initLavalink(client: Client) {
   discordClient = client;
   lavalink = new LavalinkManager({
     nodes: [
+      ...(config.lavalink.host && config.lavalink.host !== "localhost"
+        ? [
+            {
+              authorization: config.lavalink.password,
+              host: config.lavalink.host,
+              port: config.lavalink.port,
+              secure: config.lavalink.secure,
+              id: "Primary-CustomNode",
+            },
+          ]
+        : []),
       {
-        authorization: "https://discord.gg/mjS5J2K3ep",
-        host: "lava-v4.millohost.my.id",
+        authorization: "free",
+        host: "lavalink-v4.triniumhost.com",
         port: 443,
         secure: true,
-        id: "Millo-SingaporeNode",
+        id: "Trinium-FastNode",
       },
       {
         authorization: "https://seretia.link/discord",
@@ -43,11 +54,11 @@ export function initLavalink(client: Client) {
         id: "Serenetia-HighSpeed",
       },
       {
-        authorization: "free",
-        host: "lavalink-v4.triniumhost.com",
+        authorization: "https://discord.gg/mjS5J2K3ep",
+        host: "lava-v4.millohost.my.id",
         port: 443,
         secure: true,
-        id: "Trinium-FastNode",
+        id: "Millo-BackupNode",
       },
     ],
     sendToShard: (guildId, payload) => {
