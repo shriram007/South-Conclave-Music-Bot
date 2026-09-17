@@ -56,6 +56,80 @@ async function resolveTrackQuery(rawQuery) {
     const isUrl = /^https?:\/\//i.test(trimmed);
     return { query: trimmed, isUrl };
 }
+async function smartSearch(player, query, isUrl, user) {
+    if (isUrl) {
+        try {
+            const direct = await player.search({ query }, user);
+            if (direct?.tracks?.length && direct.loadType !== "empty" && direct.loadType !== "error") {
+                return direct;
+            }
+        }
+        catch { }
+        for (const node of lavalink.nodeManager.nodes.values()) {
+            if (node.connected && node.id !== player.node.id) {
+                try {
+                    const nodeRes = await node.search({ query }, user);
+                    if (nodeRes?.tracks?.length && nodeRes.loadType !== "empty" && nodeRes.loadType !== "error") {
+                        return nodeRes;
+                    }
+                }
+                catch { }
+            }
+        }
+        return null;
+    }
+    const nodesToTry = [
+        player.node,
+        ...Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.id !== player.node.id && n.connected),
+    ];
+    // 1. Try YouTube Music (ytmsearch) across all connected nodes
+    for (const node of nodesToTry) {
+        try {
+            const res = await node.search({ query, source: "ytmsearch" }, user);
+            if (res?.tracks?.length && res.loadType !== "empty" && res.loadType !== "error") {
+                console.log(`[SmartSearch] Found "${res.tracks[0].info.title}" via ytmsearch on node "${node.id}"`);
+                return res;
+            }
+        }
+        catch (e) {
+            console.warn(`[SmartSearch] ytmsearch on "${node.id}" failed:`, e?.message);
+        }
+    }
+    // 2. Try SoundCloud search (scsearch)
+    for (const node of nodesToTry) {
+        try {
+            const res = await node.search({ query, source: "scsearch" }, user);
+            if (res?.tracks?.length && res.loadType !== "empty" && res.loadType !== "error") {
+                console.log(`[SmartSearch] Found "${res.tracks[0].info.title}" via scsearch on node "${node.id}"`);
+                return res;
+            }
+        }
+        catch { }
+    }
+    // 3. Try YouTube search appending "audio" (favors clean audio streams over age-gated music videos)
+    for (const node of nodesToTry) {
+        try {
+            const res = await node.search({ query: `${query} audio`, source: "ytsearch" }, user);
+            if (res?.tracks?.length && res.loadType !== "empty" && res.loadType !== "error") {
+                console.log(`[SmartSearch] Found "${res.tracks[0].info.title}" via ytsearch (audio) on node "${node.id}"`);
+                return res;
+            }
+        }
+        catch { }
+    }
+    // 4. Standard ytsearch
+    for (const node of nodesToTry) {
+        try {
+            const res = await node.search({ query, source: "ytsearch" }, user);
+            if (res?.tracks?.length && res.loadType !== "empty" && res.loadType !== "error") {
+                console.log(`[SmartSearch] Found "${res.tracks[0].info.title}" via ytsearch on node "${node.id}"`);
+                return res;
+            }
+        }
+        catch { }
+    }
+    return null;
+}
 export const playCommand = {
     data: new SlashCommandBuilder()
         .setName("play")
@@ -75,10 +149,28 @@ export const playCommand = {
             return interaction.respond([]);
         }
         try {
-            const node = lavalink.nodeManager.leastUsedNodes()[0];
-            if (!node)
+            const nodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected);
+            if (nodes.length === 0)
                 return interaction.respond([]);
-            const res = await node.search({ query: trimmed, source: "ytmsearch" }, interaction.user);
+            let res = null;
+            for (const node of nodes) {
+                try {
+                    res = await node.search({ query: trimmed, source: "ytmsearch" }, interaction.user);
+                    if (res?.tracks?.length)
+                        break;
+                }
+                catch { }
+            }
+            if (!res?.tracks?.length) {
+                for (const node of nodes) {
+                    try {
+                        res = await node.search({ query: trimmed, source: "ytsearch" }, interaction.user);
+                        if (res?.tracks?.length)
+                            break;
+                    }
+                    catch { }
+                }
+            }
             if (!res || !res.tracks || res.tracks.length === 0) {
                 return interaction.respond([]);
             }
@@ -110,28 +202,7 @@ export const playCommand = {
         console.log(`[Play Command] User: "${interaction.user.tag}" (${interaction.user.id}) in "${interaction.guild?.name}" | Query: "${rawQuery}"`);
         try {
             const { query, isUrl } = await resolveTrackQuery(rawQuery);
-            let res;
-            try {
-                res = await player.search({
-                    query: query,
-                    source: isUrl ? undefined : "ytmsearch", // Default to YouTube Music HQ 256k
-                }, interaction.user);
-            }
-            catch (e) {
-                console.warn(`[Play Command] ytmsearch failed for "${query}", trying fallback...`);
-            }
-            // Fallback to standard YouTube if ytmsearch has no tracks or threw an error
-            if ((!res || !res.tracks || res.tracks.length === 0 || res.loadType === "empty" || res.loadType === "error") && !isUrl) {
-                try {
-                    res = await player.search({
-                        query: query,
-                        source: "ytsearch",
-                    }, interaction.user);
-                }
-                catch (e) {
-                    console.warn(`[Play Command] ytsearch fallback failed for "${query}"`);
-                }
-            }
+            let res = await smartSearch(player, query, isUrl, interaction.user);
             // Fallback for Spotify URL if Lavalink failed to load it directly
             if ((!res || !res.tracks || res.tracks.length === 0 || res.loadType === "empty" || res.loadType === "error") && isUrl && /^https?:\/\/open\.spotify\.com\//i.test(query)) {
                 console.log(`[Play Command] Direct Spotify URL failed on Lavalink. Trying oEmbed metadata fallback...`);
@@ -144,8 +215,8 @@ export const playCommand = {
                         const data = (await resp.json());
                         if (data.title) {
                             const fallbackQuery = `${data.title} ${data.author_name || ""}`.trim();
-                            console.log(`[Spotify Fallback] Searching "${fallbackQuery}" on YouTube Music...`);
-                            res = await player.search({ query: fallbackQuery, source: "ytmsearch" }, interaction.user);
+                            console.log(`[Spotify Fallback] Searching "${fallbackQuery}" via smartSearch...`);
+                            res = await smartSearch(player, fallbackQuery, false, interaction.user);
                         }
                     }
                 }

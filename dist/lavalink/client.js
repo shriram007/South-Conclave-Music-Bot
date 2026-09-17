@@ -140,25 +140,67 @@ export function initLavalink(client) {
         }
     });
     lavalink.on("trackError", async (player, track, payload) => {
-        console.error(`[Lavalink] Error playing "${track?.info.title}":`, payload);
-        // Auto-recovery for Spotify tracks that fail to stream on Lavalink: search and play on YouTube Music
-        if (track?.info.sourceName === "spotify" && !player.getData("recovering_track")) {
+        console.error(`[Lavalink] Error playing "${track?.info.title}":`, payload?.exception?.message || payload);
+        // Universal Auto-Recovery for blocked/age-gated/login-required/broken streams
+        if (!player.getData("recovering_track") && track) {
             try {
                 player.setData("recovering_track", true);
-                const fallbackQuery = `${track.info.title} ${track.info.author || ""}`.trim();
-                console.log(`[Spotify Recovery] Auto-recovering "${fallbackQuery}" via YouTube Music...`);
-                const fallbackRes = await player.search({ query: fallbackQuery, source: "ytmsearch" }, track.requester);
-                if (fallbackRes?.tracks?.[0]) {
-                    const fallbackTrack = fallbackRes.tracks[0];
-                    fallbackTrack.requester = track.requester;
-                    await player.queue.add(fallbackTrack, 0);
-                    await player.skip();
-                    setTimeout(() => player.setData("recovering_track", false), 3000);
+                const rawTitle = track.info.title || "";
+                const cleanTitle = rawTitle
+                    .replace(/\|.*/, "")
+                    .replace(/\[.*?\]/g, "")
+                    .replace(/\(.*?\)/g, "")
+                    .replace(/video song/gi, "")
+                    .replace(/official video/gi, "")
+                    .replace(/full video/gi, "")
+                    .replace(/lyric video/gi, "")
+                    .replace(/4k/gi, "")
+                    .trim();
+                const fallbackQuery = `${cleanTitle} ${track.info.author || ""}`.trim();
+                console.log(`[Universal Recovery] Stream restricted for "${rawTitle}". Auto-recovering as "${fallbackQuery}"...`);
+                // Check alternate connected nodes first if the current node had the playback failure
+                const connectedNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected);
+                const alternateNodes = connectedNodes.filter((n) => n.id !== player.node.id);
+                const nodesToTry = [...alternateNodes, player.node];
+                let recoveredTrack = null;
+                let targetNode = player.node;
+                for (const node of nodesToTry) {
+                    try {
+                        // Try YouTube Music (ytmsearch) first for official audio track
+                        let searchRes = await node.search({ query: fallbackQuery, source: "ytmsearch" }, track.requester);
+                        if (!searchRes?.tracks?.length || searchRes.loadType === "empty" || searchRes.loadType === "error") {
+                            searchRes = await node.search({ query: `${cleanTitle} audio`, source: "ytsearch" }, track.requester);
+                        }
+                        if (searchRes?.tracks?.[0]) {
+                            recoveredTrack = searchRes.tracks[0];
+                            targetNode = node;
+                            break;
+                        }
+                    }
+                    catch (e) {
+                        console.warn(`[Universal Recovery] Search failed on node ${node.id}:`, e?.message);
+                    }
+                }
+                if (recoveredTrack) {
+                    // If the recovery track was found on another node and current node failed, migrate player
+                    if (player.node.id !== targetNode.id) {
+                        console.log(`[Universal Recovery] Migrating player from ${player.node.id} to ${targetNode.id}...`);
+                        await player.changeNode(targetNode, false).catch((err) => {
+                            console.warn("[Universal Recovery] changeNode error:", err);
+                        });
+                    }
+                    recoveredTrack.requester = track.requester;
+                    await player.play({ clientTrack: recoveredTrack, noReplace: false });
+                    if (player.textChannelId) {
+                        const channel = client.channels.cache.get(player.textChannelId);
+                        channel?.send(`🔄 **Auto-Recovered:** Login/stream restriction detected on video. Swapped to high-fidelity audio stream: **${recoveredTrack.info.title}**`).catch(() => { });
+                    }
+                    setTimeout(() => player.setData("recovering_track", false), 5000);
                     return;
                 }
             }
             catch (err) {
-                console.error("[Spotify Recovery Failed]:", err);
+                console.error("[Universal Recovery Failed]:", err);
             }
             finally {
                 player.setData("recovering_track", false);
