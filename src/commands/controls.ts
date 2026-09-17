@@ -1,8 +1,9 @@
 import {
   ChatInputCommandInteraction,
   SlashCommandBuilder,
+  TextChannel,
 } from "discord.js";
-import { lavalink, updateActivePlayerMessage, validateVoiceGate } from "../lavalink/client.js";
+import { activePlayerMessages, discordClient, lavalink, updateActivePlayerMessage, validateVoiceGate } from "../lavalink/client.js";
 import { RepeatMode } from "lavalink-client";
 import { formatDuration } from "../utils/formatters.js";
 
@@ -33,7 +34,7 @@ export const pauseCommand = {
     }
 
     await player.pause();
-    await updateActivePlayerMessage(player);
+    await updateActivePlayerMessage(player, true);
     return interaction.reply("⏸️ Playback paused.");
   },
 };
@@ -49,7 +50,7 @@ export const resumeCommand = {
     }
 
     await player.resume();
-    await updateActivePlayerMessage(player);
+    await updateActivePlayerMessage(player, true);
     return interaction.reply("▶️ Playback resumed.");
   },
 };
@@ -68,9 +69,11 @@ export const skipCommand = {
       } else {
         await player.stopPlaying();
       }
+      await updateActivePlayerMessage(player);
       return interaction.editReply(`⏭️ Skipped **${currentTitle}**`);
     } catch {
       await player.stopPlaying().catch(() => {});
+      await updateActivePlayerMessage(player);
       return interaction.editReply(`⏭️ Skipped **${currentTitle}**`);
     }
   },
@@ -89,6 +92,7 @@ export const previousCommand = {
     const prevTrack = player.queue.previous[0];
     await player.queue.add(prevTrack, 0);
     await player.skip();
+    await updateActivePlayerMessage(player);
     return interaction.reply(`⏮️ Playing previous track: **${prevTrack.info.title}**`);
   },
 };
@@ -105,6 +109,16 @@ export const stopCommand = {
     await player.filterManager.resetFilters().catch(() => {});
     player.setData("hifi_active", false);
     player.setData("eq_preset", "Normal (Flat)");
+
+    const prevMsgId = activePlayerMessages.get(interaction.guildId!);
+    if (prevMsgId && player.textChannelId) {
+      const chan = discordClient?.channels.cache.get(player.textChannelId) as TextChannel | undefined;
+      if (chan) {
+        chan.messages.delete(prevMsgId).catch(() => {});
+      }
+    }
+    activePlayerMessages.delete(interaction.guildId!);
+
     await player.destroy("User executed stop command");
     return interaction.reply("⏹️ Stopped playback and disconnected from voice. Equalizer reset to **Normal (Flat)**.");
   },
@@ -131,7 +145,7 @@ export const loopCommand = {
 
     const mode = interaction.options.getString("mode", true) as RepeatMode;
     await player.setRepeatMode(mode);
-    await updateActivePlayerMessage(player);
+    await updateActivePlayerMessage(player, true);
 
     const modeLabels: Record<string, string> = {
       off: "➡️ Loop disabled",
@@ -154,6 +168,7 @@ export const shuffleCommand = {
     }
 
     await player.queue.shuffle();
+    await updateActivePlayerMessage(player);
     return interaction.reply(`🔀 Shuffled **${player.queue.tracks.length}** tracks in the queue.`);
   },
 };
@@ -199,6 +214,7 @@ export const seekCommand = {
     }
 
     await player.seek(targetMs);
+    await updateActivePlayerMessage(player, true);
     return interaction.reply(`⏩ Jumped to **${formatDuration(targetMs)}**`);
   },
 };

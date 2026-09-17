@@ -126,6 +126,7 @@ async function handleButtonInteraction(interaction) {
                     }
                     await interaction.reply({
                         content: `⏭️ **${interaction.user.username}** skipped the track.`,
+                        ephemeral: true,
                     }).catch(() => { });
                 }
                 catch {
@@ -140,6 +141,7 @@ async function handleButtonInteraction(interaction) {
                     await player.skip();
                     await interaction.reply({
                         content: `⏮️ **${interaction.user.username}** replayed previous track.`,
+                        ephemeral: true,
                     });
                 }
                 else {
@@ -153,6 +155,7 @@ async function handleButtonInteraction(interaction) {
             case "player_stop": {
                 await player.filterManager.resetFilters().catch(() => { });
                 player.setData("hifi_active", false);
+                player.setData("filter_preset_key", "reset");
                 player.setData("eq_preset", "Normal (Flat)");
                 await player.destroy("Stopped by user via button");
                 await interaction.update({
@@ -180,8 +183,10 @@ async function handleButtonInteraction(interaction) {
                     });
                 }
                 await player.queue.shuffle();
-                await interaction.reply({
+                await interaction.update(buildPlayerMessage(player));
+                await interaction.followUp({
                     content: `🔀 Queue shuffled by **${interaction.user.username}** (${player.queue.tracks.length} tracks).`,
+                    ephemeral: true,
                 });
                 break;
             }
@@ -201,6 +206,7 @@ async function handleButtonInteraction(interaction) {
                 const isCurrentlyActive = Boolean(player.getData("hifi_active"));
                 if (isCurrentlyActive) {
                     player.setData("hifi_active", false);
+                    player.setData("filter_preset_key", "reset");
                     player.setData("eq_preset", "Normal (Flat)");
                     await player.filterManager.clearEQ();
                     await interaction.update(buildPlayerMessage(player));
@@ -211,6 +217,7 @@ async function handleButtonInteraction(interaction) {
                 }
                 else {
                     player.setData("hifi_active", true);
+                    player.setData("filter_preset_key", "hifi");
                     player.setData("eq_preset", "💎 Hi-Fi Studio");
                     await player.filterManager.setEQ(EQ_PRESETS.hifi);
                     await interaction.update(buildPlayerMessage(player));
@@ -295,6 +302,7 @@ async function handleSelectMenuInteraction(interaction) {
         const preset = interaction.values[0];
         await player.filterManager.resetFilters();
         await player.filterManager.clearEQ();
+        player.setData("filter_preset_key", preset);
         let presetLabel = "Normal (Flat)";
         switch (preset) {
             case "hifi":

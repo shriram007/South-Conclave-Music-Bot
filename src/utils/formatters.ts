@@ -18,26 +18,34 @@ export function formatDuration(ms: number): string {
 }
 
 /**
- * Create a visual progress bar
+ * Create a visual progress bar with filled bar, pointer, and playback state
  */
-export function createProgressBar(currentMs: number, totalMs: number, barLength: number = 16): string {
+export function createProgressBar(
+  currentMs: number,
+  totalMs: number,
+  barLength: number = 15,
+  isPaused: boolean = false
+): string {
   if (!totalMs || totalMs <= 0) {
-    return "🔘" + "─".repeat(barLength - 1);
+    return `🔴 \`LIVE STREAM\` \`[${formatDuration(currentMs)}]\``;
   }
 
   const progress = Math.min(Math.max(currentMs / totalMs, 0), 1);
-  const progressIndex = Math.floor(progress * (barLength - 1));
+  const progressIndex = Math.min(Math.floor(progress * barLength), barLength - 1);
 
   let bar = "";
   for (let i = 0; i < barLength; i++) {
-    if (i === progressIndex) {
+    if (i < progressIndex) {
+      bar += "━";
+    } else if (i === progressIndex) {
       bar += "🔘";
     } else {
       bar += "─";
     }
   }
 
-  return `\`${bar}\` \`[${formatDuration(currentMs)} / ${formatDuration(totalMs)}]\``;
+  const statusIcon = isPaused ? "⏸️" : "▶️";
+  return `${statusIcon} \`${formatDuration(currentMs)}\` \`${bar}\` \`${formatDuration(totalMs)}\``;
 }
 
 /**

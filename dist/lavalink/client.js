@@ -1,3 +1,4 @@
+import { EmbedBuilder, } from "discord.js";
 import { LavalinkManager } from "lavalink-client";
 import { buildPlayerMessage } from "./playerUI.js";
 import { getChannelBitrateInfo } from "../utils/formatters.js";
@@ -38,7 +39,7 @@ export function initLavalink(client) {
         autoSkip: true,
         autoMove: true,
         playerOptions: {
-            clientBasedPositionUpdateInterval: 500,
+            clientBasedPositionUpdateInterval: 150, // 150ms position accuracy for ultra-smooth timestamps
             defaultSearchPlatform: "ytmsearch", // YouTube Music HQ 256k as default
             volumeDecrementer: 1,
             onDisconnect: {
@@ -57,7 +58,7 @@ export function initLavalink(client) {
     lavalink.nodeManager.on("error", (node, error) => {
         console.error(`[Lavalink] Node "${node.id}" encountered an error:`, error.message);
     });
-    // Dedicated Live Player Ticker (every 4.5 seconds while playing)
+    // Dedicated Live Player Ticker (smooth 3.5s updates while playing)
     const liveTickers = new Map();
     function startLivePlayerTicker(player) {
         stopLivePlayerTicker(player.guildId);
@@ -72,7 +73,7 @@ export function initLavalink(client) {
                 await updateActivePlayerMessage(player);
             }
             catch { }
-        }, 4500);
+        }, 3500);
         liveTickers.set(player.guildId, ticker);
     }
     function stopLivePlayerTicker(guildId) {
@@ -82,11 +83,6 @@ export function initLavalink(client) {
             liveTickers.delete(guildId);
         }
     }
-    lavalink.on("playerUpdate", async (oldPlayer, player) => {
-        if (!player.playing || player.paused)
-            return;
-        await updateActivePlayerMessage(player);
-    });
     // Player Events
     lavalink.on("trackStart", async (player, track) => {
         if (!player.textChannelId || !track)
@@ -96,15 +92,31 @@ export function initLavalink(client) {
         if (!channel || !channel.isTextBased())
             return;
         try {
-            // Clean up previous active player message so chat stays neat
             const prevMessageId = activePlayerMessages.get(player.guildId) || player.getData("active_message_id");
-            if (prevMessageId) {
-                channel.messages.delete(prevMessageId).catch(() => { });
-            }
             const playerMsgOptions = buildPlayerMessage(player, track);
-            const sentMsg = await channel.send(playerMsgOptions);
-            activePlayerMessages.set(player.guildId, sentMsg.id);
-            player.setData("active_message_id", sentMsg.id);
+            let editedExisting = false;
+            if (prevMessageId) {
+                // If the player message was the latest in chat, edit it seamlessly in-place!
+                if (channel.lastMessageId === prevMessageId) {
+                    try {
+                        const prevMsg = channel.messages.cache.get(prevMessageId) || (await channel.messages.fetch(prevMessageId).catch(() => null));
+                        if (prevMsg) {
+                            await prevMsg.edit(playerMsgOptions);
+                            editedExisting = true;
+                        }
+                    }
+                    catch { }
+                }
+                // If not edited in place (e.g. users chatted in between), clean up the old one
+                if (!editedExisting) {
+                    channel.messages.delete(prevMessageId).catch(() => { });
+                }
+            }
+            if (!editedExisting) {
+                const sentMsg = await channel.send(playerMsgOptions);
+                activePlayerMessages.set(player.guildId, sentMsg.id);
+                player.setData("active_message_id", sentMsg.id);
+            }
             // Start live progress bar updates
             startLivePlayerTicker(player);
             // Check voice channel bitrate quality and warn if low
@@ -131,12 +143,34 @@ export function initLavalink(client) {
         const channel = client.channels.cache.get(player.textChannelId);
         if (channel) {
             const is247 = is247Enabled(player.guildId);
-            if (is247) {
-                channel.send("🎶 Queue finished. Staying **24/7** in voice channel! Add more songs with `/play`.").catch(() => { });
+            const prevMessageId = activePlayerMessages.get(player.guildId) || player.getData("active_message_id");
+            const queueFinishedEmbed = new EmbedBuilder()
+                .setColor(0x5865f2)
+                .setTitle("🎶 Queue Finished")
+                .setDescription(is247
+                ? "✨ All tracks finished playing. Staying **24/7** in voice channel!\n\nUse `/play <song>` to queue more music."
+                : "✨ All tracks finished playing. Use `/play <song>` to start jamming again!")
+                .setFooter({ text: "💎 South Conclave Audiophile Engine" })
+                .setTimestamp();
+            if (prevMessageId) {
+                try {
+                    const prevMsg = channel.messages.cache.get(prevMessageId) || (await channel.messages.fetch(prevMessageId).catch(() => null));
+                    if (prevMsg) {
+                        await prevMsg.edit({ embeds: [queueFinishedEmbed], components: [] });
+                    }
+                    else {
+                        await channel.send({ embeds: [queueFinishedEmbed] });
+                    }
+                }
+                catch {
+                    await channel.send({ embeds: [queueFinishedEmbed] }).catch(() => { });
+                }
             }
             else {
-                channel.send("🎶 Queue finished. Add more songs with `/play`!").catch(() => { });
+                await channel.send({ embeds: [queueFinishedEmbed] }).catch(() => { });
             }
+            activePlayerMessages.delete(player.guildId);
+            player.setData("active_message_id", null);
         }
     });
     lavalink.on("trackEnd", (player, track, payload) => {
@@ -144,6 +178,10 @@ export function initLavalink(client) {
         if (!player.queue.current) {
             stopLivePlayerTicker(player.guildId);
         }
+    });
+    lavalink.on("playerDestroy", (player) => {
+        stopLivePlayerTicker(player.guildId);
+        activePlayerMessages.delete(player.guildId);
     });
     lavalink.on("trackError", async (player, track, payload) => {
         console.error(`[Lavalink] Error playing "${track?.info.title}":`, payload?.exception?.message || payload);
@@ -273,10 +311,59 @@ export async function getOrCreatePlayer(interaction) {
     }
     return { player };
 }
+const updaterStates = new Map();
 /**
- * Updates the active Now Playing message in the text channel (if one exists)
+ * Updates the active Now Playing message in the text channel with rate-limiting & queuing protection
  */
-export async function updateActivePlayerMessage(player) {
+export async function updateActivePlayerMessage(player, immediate = false) {
+    if (!player.textChannelId)
+        return;
+    let state = updaterStates.get(player.guildId);
+    if (!state) {
+        state = { inFlight: false, pending: false, lastEditTime: 0 };
+        updaterStates.set(player.guildId, state);
+    }
+    const now = Date.now();
+    const MIN_INTERVAL = 2200; // minimum 2.2s between message edits to guarantee zero Discord 429 rate limits
+    const elapsed = now - state.lastEditTime;
+    if (state.inFlight) {
+        state.pending = true;
+        return;
+    }
+    if (!immediate && elapsed < MIN_INTERVAL) {
+        state.pending = true;
+        if (!state.timer) {
+            state.timer = setTimeout(async () => {
+                state.timer = undefined;
+                if (state.pending) {
+                    state.pending = false;
+                    await updateActivePlayerMessage(player);
+                }
+            }, MIN_INTERVAL - elapsed);
+        }
+        return;
+    }
+    if (state.timer) {
+        clearTimeout(state.timer);
+        state.timer = undefined;
+    }
+    state.inFlight = true;
+    try {
+        await performPlayerMessageEdit(player);
+        state.lastEditTime = Date.now();
+    }
+    finally {
+        state.inFlight = false;
+        if (state.pending) {
+            state.pending = false;
+            state.timer = setTimeout(() => {
+                state.timer = undefined;
+                updateActivePlayerMessage(player);
+            }, MIN_INTERVAL);
+        }
+    }
+}
+async function performPlayerMessageEdit(player) {
     if (!player.textChannelId)
         return;
     let messageId = activePlayerMessages.get(player.guildId) || player.getData("active_message_id");
@@ -304,9 +391,17 @@ export async function updateActivePlayerMessage(player) {
         if (msg) {
             await msg.edit(buildPlayerMessage(player));
         }
+        else {
+            activePlayerMessages.delete(player.guildId);
+            player.setData("active_message_id", null);
+        }
     }
     catch (err) {
-        // If message is deleted or cannot be edited, quietly ignore
+        if (err.code === 10008) {
+            // 10008: Unknown Message (deleted by user or mod)
+            activePlayerMessages.delete(player.guildId);
+            player.setData("active_message_id", null);
+        }
     }
 }
 /**

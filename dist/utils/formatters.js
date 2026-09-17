@@ -14,24 +14,28 @@ export function formatDuration(ms) {
     return `${pad(minutes)}:${pad(seconds)}`;
 }
 /**
- * Create a visual progress bar
+ * Create a visual progress bar with filled bar, pointer, and playback state
  */
-export function createProgressBar(currentMs, totalMs, barLength = 16) {
+export function createProgressBar(currentMs, totalMs, barLength = 15, isPaused = false) {
     if (!totalMs || totalMs <= 0) {
-        return "🔘" + "─".repeat(barLength - 1);
+        return `🔴 \`LIVE STREAM\` \`[${formatDuration(currentMs)}]\``;
     }
     const progress = Math.min(Math.max(currentMs / totalMs, 0), 1);
-    const progressIndex = Math.floor(progress * (barLength - 1));
+    const progressIndex = Math.min(Math.floor(progress * barLength), barLength - 1);
     let bar = "";
     for (let i = 0; i < barLength; i++) {
-        if (i === progressIndex) {
+        if (i < progressIndex) {
+            bar += "━";
+        }
+        else if (i === progressIndex) {
             bar += "🔘";
         }
         else {
             bar += "─";
         }
     }
-    return `\`${bar}\` \`[${formatDuration(currentMs)} / ${formatDuration(totalMs)}]\``;
+    const statusIcon = isPaused ? "⏸️" : "▶️";
+    return `${statusIcon} \`${formatDuration(currentMs)}\` \`${bar}\` \`${formatDuration(totalMs)}\``;
 }
 /**
  * Return friendly badges and bitrate descriptions for various audio sources

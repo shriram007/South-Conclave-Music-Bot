@@ -25,6 +25,7 @@ export const filterCommand = {
             // Clear previous filters before applying new one to prevent conflicts
             await player.filterManager.resetFilters();
             await player.filterManager.clearEQ();
+            player.setData("filter_preset_key", preset);
             switch (preset) {
                 case "hifi":
                     player.setData("hifi_active", true);

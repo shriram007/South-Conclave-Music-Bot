@@ -2,7 +2,7 @@ import {
   ChatInputCommandInteraction,
   SlashCommandBuilder,
 } from "discord.js";
-import { lavalink } from "../lavalink/client.js";
+import { activePlayerMessages, lavalink } from "../lavalink/client.js";
 import { buildPlayerMessage } from "../lavalink/playerUI.js";
 
 export const nowplayingCommand = {
@@ -17,6 +17,8 @@ export const nowplayingCommand = {
     }
 
     const playerMsg = buildPlayerMessage(player);
-    return interaction.reply(playerMsg);
+    const reply = await interaction.reply({ ...playerMsg, fetchReply: true });
+    activePlayerMessages.set(interaction.guildId!, reply.id);
+    player.setData("active_message_id", reply.id);
   },
 };

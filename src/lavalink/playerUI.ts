@@ -29,7 +29,8 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
   const source = getSourceInfo(current.info.sourceName);
   const position = player.position || 0;
   const duration = current.info.duration || 0;
-  const progressBar = createProgressBar(position, duration);
+  const isPaused = player.paused;
+  const progressBar = createProgressBar(position, duration, 15, isPaused);
 
   const loopModeDisplay =
     player.repeatMode === "track"
@@ -38,9 +39,13 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
       ? "🔁 Queue"
       : "Off";
 
-  const isPaused = player.paused;
   const volume = player.volume;
+  let volEmoji = "🔊";
+  if (volume === 0) volEmoji = "🔇";
+  else if (volume < 50) volEmoji = "🔉";
+
   const isFilterActive = Boolean(player.getData("hifi_active"));
+  const activePresetKey = (player.getData("filter_preset_key") as string) || (isFilterActive ? "hifi" : "reset");
   const eqPreset = (player.getData("eq_preset") as string) || (isFilterActive ? "💎 Hi-Fi Studio" : "Normal (Flat)");
 
   const requester = current.requester as any;
@@ -49,10 +54,24 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
 
   const botAvatar = discordClient?.user?.displayAvatarURL({ extension: "png", size: 128 });
 
+  // Dynamic header status
+  let statusHeader = isPaused ? "⏸️ Paused" : "▶️ Now Playing";
+  const speed = player.filterManager?.data?.timescale?.speed || 1.0;
+  if (!isPaused && speed > 1.1) {
+    statusHeader = `🏎️ Playing (${speed}x Turbo)`;
+  } else if (!isPaused && activePresetKey === "nightcore") {
+    statusHeader = "⚡ Playing (Nightcore)";
+  } else if (!isPaused && activePresetKey === "8d") {
+    statusHeader = "🎧 Playing (8D Audio)";
+  }
+
+  const queueCount = player.queue.tracks.length;
+  const queueLabel = queueCount === 0 ? "Empty" : `${queueCount} track${queueCount > 1 ? "s" : ""}`;
+
   const embed = new EmbedBuilder()
     .setColor(source.color)
     .setAuthor({
-      name: `Now Playing • ${source.name}`,
+      name: `${statusHeader} • ${source.name}`,
       ...(botAvatar ? { iconURL: botAvatar } : {}),
       url: current.info.uri || undefined,
     })
@@ -62,11 +81,11 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
       `👤 **Artist:** \`${current.info.author || "Unknown"}\`\n` +
       `⚡ **Source:** ${source.badge}\n\n` +
       `${progressBar}\n\n` +
-      `🔊 **Vol:** \`${volume}%\` • 🔁 **Loop:** \`${loopModeDisplay}\` • 🎛️ **Preset:** \`${eqPreset}\`\n` +
-      `📑 **Queue:** \`${player.queue.tracks.length} track(s)\` • 👤 **Requested by:** ${requesterDisplay}`
+      `${volEmoji} **Vol:** \`${volume}%\` • 🔁 **Loop:** \`${loopModeDisplay}\` • 🎛️ **Preset:** \`${eqPreset}\`\n` +
+      `📑 **Queue:** \`${queueLabel}\` • 👤 **Requested by:** ${requesterDisplay}`
     )
     .setFooter({
-      text: "💎 South Conclave Audiophile Engine • Use buttons & dropdown below",
+      text: "💎 South Conclave Audiophile Engine • Live Interactive Player",
     })
     .setTimestamp();
 
@@ -84,7 +103,7 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
     new ButtonBuilder()
       .setCustomId("player_pause_resume")
       .setEmoji(isPaused ? "▶️" : "⏸️")
-      .setLabel(isPaused ? "Play" : "Pause")
+      .setLabel(isPaused ? "Resume" : "Pause")
       .setStyle(isPaused ? ButtonStyle.Success : ButtonStyle.Primary),
     new ButtonBuilder()
       .setCustomId("player_skip")
@@ -95,34 +114,36 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
       .setCustomId("player_shuffle")
       .setEmoji("🔀")
       .setStyle(ButtonStyle.Secondary)
-      .setDisabled(player.queue.tracks.length < 2),
+      .setDisabled(queueCount < 2),
     new ButtonBuilder()
       .setCustomId("player_stop")
       .setEmoji("⏹️")
       .setStyle(ButtonStyle.Danger)
   );
 
-  // Row 2: Secondary Controls (Volume, Loop, Queue view, Lyrics)
+  // Row 2: Secondary Controls (Volume, Loop, Queue view with live count, Lyrics)
   const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId("player_voldown")
       .setEmoji("🔉")
       .setLabel("-10%")
-      .setStyle(ButtonStyle.Secondary),
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(volume <= 0),
     new ButtonBuilder()
       .setCustomId("player_volup")
       .setEmoji("🔊")
       .setLabel("+10%")
-      .setStyle(ButtonStyle.Secondary),
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(volume >= 200),
     new ButtonBuilder()
       .setCustomId("player_loop")
-      .setEmoji("🔁")
+      .setEmoji(player.repeatMode === "track" ? "🔂" : "🔁")
       .setLabel(loopModeDisplay)
       .setStyle(player.repeatMode !== "off" ? ButtonStyle.Success : ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId("player_queue")
       .setEmoji("📋")
-      .setLabel("Queue")
+      .setLabel(`Queue (${queueCount})`)
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId("player_lyrics")
@@ -131,22 +152,27 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
       .setStyle(ButtonStyle.Secondary)
   );
 
-  // Row 3: Interactive Filter / EQ Select Menu (Flavi-style dropdown)
+  // Row 3: Interactive Filter / EQ Select Menu (with active preset marked default)
+  const filterOptions = [
+    { label: "Hi-Fi Studio (Audiophile Sparkle)", value: "hifi", emoji: "💎", description: "Studio clarity & dynamics" },
+    { label: "Bass Boost", value: "bassboost", emoji: "🔊", description: "Punchy deep sub-bass" },
+    { label: "Turbo Rush (1.35x)", value: "turbo", emoji: "🏎️", description: "High-tempo workout/gaming boost" },
+    { label: "Vocal / Treble Boost", value: "treble", emoji: "🎤", description: "Crisp acoustic highs & clarity" },
+    { label: "8D Audio", value: "8d", emoji: "🎧", description: "Rotating 360° binaural immersion" },
+    { label: "Nightcore", value: "nightcore", emoji: "⚡", description: "Fast tempo & pitch boost" },
+    { label: "Vaporwave", value: "vaporwave", emoji: "🌊", description: "Slowed & relaxed aesthetic" },
+    { label: "Karaoke (Sing-Along)", value: "karaoke", emoji: "🎤", description: "Suppresses vocals for sing-along" },
+    { label: "Reset to Flat / Pure Audio", value: "reset", emoji: "🔄", description: "Pristine lossless studio audio" },
+  ].map((opt) => ({
+    ...opt,
+    default: opt.value === activePresetKey,
+  }));
+
   const row3 = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId("player_filter_menu")
       .setPlaceholder("🎛️ Select Sound Filter or Equalizer Preset...")
-      .addOptions([
-        { label: "Hi-Fi Studio (Audiophile Sparkle)", value: "hifi", emoji: "💎", description: "Studio clarity & dynamics" },
-        { label: "Bass Boost", value: "bassboost", emoji: "🔊", description: "Punchy deep sub-bass" },
-        { label: "Turbo Rush (1.35x)", value: "turbo", emoji: "🏎️", description: "High-tempo workout/gaming boost" },
-        { label: "Vocal / Treble Boost", value: "treble", emoji: "🎤", description: "Crisp acoustic highs & clarity" },
-        { label: "8D Audio", value: "8d", emoji: "🎧", description: "Rotating 360° binaural immersion" },
-        { label: "Nightcore", value: "nightcore", emoji: "⚡", description: "Fast tempo & pitch boost" },
-        { label: "Vaporwave", value: "vaporwave", emoji: "🌊", description: "Slowed & relaxed aesthetic" },
-        { label: "Karaoke (Sing-Along)", value: "karaoke", emoji: "🎤", description: "Suppresses vocals for sing-along" },
-        { label: "Reset to Flat / Pure Audio", value: "reset", emoji: "🔄", description: "Pristine lossless studio audio" },
-      ])
+      .addOptions(filterOptions)
   );
 
   return {
