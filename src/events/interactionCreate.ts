@@ -99,6 +99,7 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
       }
 
       case "player_rewind_10": {
+        if (!player.queue.current) return interaction.reply({ content: "⚠️ No track currently playing.", ephemeral: true });
         const currentPos = player.position || 0;
         const newPos = Math.max(0, currentPos - 10000);
         await player.seek(newPos);
@@ -107,8 +108,9 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
       }
 
       case "player_forward_10": {
+        if (!player.queue.current) return interaction.reply({ content: "⚠️ No track currently playing.", ephemeral: true });
         const currentPos = player.position || 0;
-        const maxDuration = player.queue.current?.info.duration || Infinity;
+        const maxDuration = player.queue.current.info.duration || Infinity;
         const newPos = Math.min(maxDuration, currentPos + 10000);
         await player.seek(newPos);
         await interaction.update(buildPlayerMessage(player));
@@ -116,6 +118,7 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
       }
 
       case "player_rewind_30": {
+        if (!player.queue.current) return interaction.reply({ content: "⚠️ No track currently playing.", ephemeral: true });
         const currentPos = player.position || 0;
         const newPos = Math.max(0, currentPos - 30000);
         await player.seek(newPos);
@@ -124,8 +127,9 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
       }
 
       case "player_forward_30": {
+        if (!player.queue.current) return interaction.reply({ content: "⚠️ No track currently playing.", ephemeral: true });
         const currentPos = player.position || 0;
-        const maxDuration = player.queue.current?.info.duration || Infinity;
+        const maxDuration = player.queue.current.info.duration || Infinity;
         const newPos = Math.min(maxDuration, currentPos + 30000);
         await player.seek(newPos);
         await interaction.update(buildPlayerMessage(player));

@@ -30,59 +30,57 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
   const position = player.position || 0;
   const duration = current.info.duration || 0;
   const isPaused = player.paused;
-  const progressBar = createProgressBar(position, duration, 15, isPaused);
+  const isSeekable = Boolean(current.info.isSeekable !== false && duration > 0);
+  const progressBar = createProgressBar(position, duration, 16, isPaused);
 
   const loopModeDisplay =
     player.repeatMode === "track"
-      ? "🔂 Track"
+      ? "Track"
       : player.repeatMode === "queue"
-      ? "🔁 Queue"
+      ? "Queue"
       : "Off";
 
   const volume = player.volume;
-  let volEmoji = "🔊";
-  if (volume === 0) volEmoji = "🔇";
-  else if (volume < 50) volEmoji = "🔉";
-
   const isFilterActive = Boolean(player.getData("hifi_active"));
   const activePresetKey = (player.getData("filter_preset_key") as string) || (isFilterActive ? "hifi" : "reset");
   const eqPreset = (player.getData("eq_preset") as string) || (isFilterActive ? "💎 Hi-Fi Studio" : "Normal (Flat)");
 
   const requester = current.requester as any;
   const requesterId = requester?.id || (current.userData as any)?.userId || (typeof requester === "string" ? requester : null);
-  const requesterDisplay = requesterId ? `<@${requesterId}>` : (requester?.username || "Server Member");
+  const requesterDisplay = requesterId ? `<@${requesterId}>` : (requester?.username ? `@${requester.username}` : "Server Member");
 
   const botAvatar = discordClient?.user?.displayAvatarURL({ extension: "png", size: 128 });
 
   // Dynamic header status
-  let statusHeader = isPaused ? "⏸️ Paused" : "▶️ Now Playing";
+  let statusHeader = isPaused ? "⏸️ Paused" : "Now playing";
   const speed = player.filterManager?.data?.timescale?.speed || 1.0;
   if (!isPaused && speed > 1.1) {
-    statusHeader = `🏎️ Playing (${speed}x Turbo)`;
+    statusHeader = `Now playing (🏎️ ${speed}x Turbo)`;
   } else if (!isPaused && activePresetKey === "nightcore") {
-    statusHeader = "⚡ Playing (Nightcore)";
+    statusHeader = "Now playing (⚡ Nightcore)";
   } else if (!isPaused && activePresetKey === "8d") {
-    statusHeader = "🎧 Playing (8D Audio)";
+    statusHeader = "Now playing (🎧 8D Audio)";
   }
 
   const queueCount = player.queue.tracks.length;
-  const queueLabel = queueCount === 0 ? "Empty" : `${queueCount} track${queueCount > 1 ? "s" : ""}`;
+  const safeTitle = current.info.title.substring(0, 200).replace(/\[/g, "\\[").replace(/\]/g, "\\]");
+  const vcMention = player.voiceChannelId ? `<#${player.voiceChannelId}>` : "Voice Channel";
 
+  // Flavi-inspired sleek layout
   const embed = new EmbedBuilder()
     .setColor(source.color)
     .setAuthor({
-      name: `${statusHeader} • ${source.name}`,
+      name: statusHeader,
       ...(botAvatar ? { iconURL: botAvatar } : {}),
       url: current.info.uri || undefined,
     })
-    .setTitle(current.info.title.substring(0, 256))
-    .setURL(current.info.uri || "https://discord.com")
     .setDescription(
-      `👤 **Artist:** \`${current.info.author || "Unknown"}\`\n` +
-      `⚡ **Source:** ${source.badge}\n\n` +
-      `${progressBar}\n\n` +
-      `${volEmoji} **Vol:** \`${volume}%\` • 🔁 **Loop:** \`${loopModeDisplay}\` • 🎛️ **Preset:** \`${eqPreset}\`\n` +
-      `📑 **Queue:** \`${queueLabel}\` • 👤 **Requested by:** ${requesterDisplay}`
+      `## [${safeTitle}](${current.info.uri || "https://discord.com"})\n\n` +
+      `• **Added by:** ${requesterDisplay}\n` +
+      `• **Voice Channel:** ${vcMention}\n` +
+      `• **Fidelity:** ${source.badge}\n\n` +
+      `Queue Size: **${queueCount}** · Volume: **${volume}%** · Loop: **${loopModeDisplay}** · Preset: **${eqPreset}**\n\n` +
+      `${progressBar}`
     )
     .setFooter({
       text: "💎 South Conclave Audiophile Engine • Live Interactive Player",
@@ -93,11 +91,12 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
     embed.setThumbnail(current.info.artworkUrl);
   }
 
-  // Row 1: Core playback & navigation
+  // Row 1: Core playback & navigation (Flavi style)
   const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId("player_prev")
       .setEmoji("⏮️")
+      .setLabel("Prev")
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(player.queue.previous.length === 0),
     new ButtonBuilder()
@@ -111,18 +110,32 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
       .setLabel("Skip")
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
-      .setCustomId("player_shuffle")
-      .setEmoji("🔀")
-      .setStyle(ButtonStyle.Secondary)
-      .setDisabled(queueCount < 2),
-    new ButtonBuilder()
       .setCustomId("player_stop")
       .setEmoji("⏹️")
-      .setStyle(ButtonStyle.Danger)
+      .setLabel("Stop")
+      .setStyle(ButtonStyle.Danger),
+    new ButtonBuilder()
+      .setCustomId("player_shuffle")
+      .setEmoji("🔀")
+      .setLabel("Shuffle")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(queueCount < 2)
   );
 
-  // Row 2: Secondary Controls (Volume, Loop, Queue view with live count, Lyrics)
+  // Row 2: 10s Seek Controls & Volume & Loop Mode
   const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId("player_rewind_10")
+      .setEmoji("⏪")
+      .setLabel("-10s")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(!isSeekable),
+    new ButtonBuilder()
+      .setCustomId("player_forward_10")
+      .setEmoji("⏩")
+      .setLabel("+10s")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(!isSeekable),
     new ButtonBuilder()
       .setCustomId("player_voldown")
       .setEmoji("🔉")
@@ -139,7 +152,23 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
       .setCustomId("player_loop")
       .setEmoji(player.repeatMode === "track" ? "🔂" : "🔁")
       .setLabel(loopModeDisplay)
-      .setStyle(player.repeatMode !== "off" ? ButtonStyle.Success : ButtonStyle.Secondary),
+      .setStyle(player.repeatMode !== "off" ? ButtonStyle.Success : ButtonStyle.Secondary)
+  );
+
+  // Row 3: 30s Seek Controls & Overlays (Queue, Lyrics, Quick Hi-Fi EQ)
+  const row3 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId("player_rewind_30")
+      .setEmoji("⏪")
+      .setLabel("-30s")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(!isSeekable),
+    new ButtonBuilder()
+      .setCustomId("player_forward_30")
+      .setEmoji("⏩")
+      .setLabel("+30s")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(!isSeekable),
     new ButtonBuilder()
       .setCustomId("player_queue")
       .setEmoji("📋")
@@ -149,10 +178,15 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
       .setCustomId("player_lyrics")
       .setEmoji("📜")
       .setLabel("Lyrics")
-      .setStyle(ButtonStyle.Secondary)
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId("player_hifieq")
+      .setEmoji("💎")
+      .setLabel("Hi-Fi")
+      .setStyle(isFilterActive ? ButtonStyle.Success : ButtonStyle.Secondary)
   );
 
-  // Row 3: Interactive Filter / EQ Select Menu (with active preset marked default)
+  // Row 4: Interactive Sound Filter / EQ Select Menu (with active preset marked default)
   const filterOptions = [
     { label: "Hi-Fi Studio (Audiophile Sparkle)", value: "hifi", emoji: "💎", description: "Studio clarity & dynamics" },
     { label: "Bass Boost", value: "bassboost", emoji: "🔊", description: "Punchy deep sub-bass" },
@@ -168,7 +202,7 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
     default: opt.value === activePresetKey,
   }));
 
-  const row3 = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+  const row4 = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId("player_filter_menu")
       .setPlaceholder("🎛️ Select Sound Filter or Equalizer Preset...")
@@ -177,6 +211,6 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
 
   return {
     embeds: [embed],
-    components: [row1, row2, row3],
+    components: [row1, row2, row3, row4],
   };
 }
