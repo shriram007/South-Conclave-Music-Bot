@@ -3,6 +3,7 @@ import {
   ChatInputCommandInteraction,
   Client,
   GuildMember,
+  StringSelectMenuInteraction,
   TextChannel,
   VoiceBasedChannel,
 } from "discord.js";
@@ -351,7 +352,7 @@ export async function updateActivePlayerMessage(player: Player) {
  * Voice Gate: Validates that the interacting user is currently in the same voice channel as the bot
  */
 export async function validateVoiceGate(
-  interaction: ChatInputCommandInteraction | ButtonInteraction,
+  interaction: ChatInputCommandInteraction | ButtonInteraction | StringSelectMenuInteraction,
   player: Player
 ): Promise<{ allowed: boolean; error?: string }> {
   const guild = interaction.guild || (interaction.guildId ? interaction.client.guilds.cache.get(interaction.guildId) || await interaction.client.guilds.fetch(interaction.guildId).catch(() => null) : null);
