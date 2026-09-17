@@ -73,6 +73,14 @@ async function handleButtonInteraction(interaction) {
         });
     }
     try {
+        // If the player's node is currently disconnected, seamlessly failover to a healthy connected node
+        if (!player.node || !player.node.connected) {
+            const healthyNode = Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected);
+            if (healthyNode) {
+                console.log(`[Failover] Player's current node is disconnected. Migrating player to "${healthyNode.id}"...`);
+                await player.changeNode(healthyNode, false).catch(() => { });
+            }
+        }
         switch (interaction.customId) {
             case "player_pause_resume": {
                 console.log(`[Button: Pause/Resume] BEFORE: paused=${player.paused} | Song: "${player.queue.current?.info.title}" | Pos: ${player.position}ms`);
@@ -301,8 +309,22 @@ async function handleButtonInteraction(interaction) {
     }
     catch (err) {
         console.error("[Button Interaction Error]:", err);
+        // If node was reconnecting or session dropped, gracefully failover
+        if (err.message?.includes("Node Request") || err.message?.includes("not connected") || err.message?.includes("Socket")) {
+            const healthyNode = Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected && n.id !== player.node.id);
+            if (healthyNode) {
+                await player.changeNode(healthyNode, false).catch(() => { });
+            }
+            if (!interaction.replied && !interaction.deferred) {
+                await interaction.reply({
+                    content: "🔄 Audio connection refreshed. Please press the button again!",
+                    ephemeral: true,
+                }).catch(() => { });
+            }
+            return;
+        }
         if (!interaction.replied && !interaction.deferred) {
-            await interaction.reply({ content: `⚠️ Action failed: ${err.message}`, ephemeral: true }).catch(() => { });
+            await interaction.reply({ content: "⚠️ Action could not be completed. Please try again.", ephemeral: true }).catch(() => { });
         }
     }
 }
@@ -315,72 +337,86 @@ async function handleSelectMenuInteraction(interaction) {
     if (!gate.allowed) {
         return interaction.reply({ content: gate.error, ephemeral: true });
     }
-    if (interaction.customId === "player_filter_menu") {
-        const preset = interaction.values[0];
-        await player.filterManager.resetFilters();
-        await player.filterManager.clearEQ();
-        player.setData("filter_preset_key", preset);
-        let presetLabel = "Normal (Flat)";
-        switch (preset) {
-            case "hifi":
-                player.setData("hifi_active", true);
-                player.setData("eq_preset", "💎 Hi-Fi Studio");
-                await player.filterManager.setEQ(EQ_PRESETS.hifi);
-                presetLabel = "💎 Hi-Fi Studio";
-                break;
-            case "bassboost":
-                player.setData("hifi_active", false);
-                player.setData("eq_preset", "🔊 Bass Boost");
-                await player.filterManager.setEQ(EQ_PRESETS.bassboost);
-                presetLabel = "🔊 Bass Boost";
-                break;
-            case "turbo":
-                player.setData("hifi_active", false);
-                player.setData("eq_preset", "🏎️ Turbo Rush");
-                await player.filterManager.setSpeed(1.35);
-                presetLabel = "🏎️ Turbo Rush (1.35x)";
-                break;
-            case "treble":
-                player.setData("hifi_active", false);
-                player.setData("eq_preset", "🎤 Treble Boost");
-                await player.filterManager.setEQ(EQ_PRESETS.treble);
-                presetLabel = "🎤 Treble Boost";
-                break;
-            case "8d":
-                player.setData("hifi_active", false);
-                player.setData("eq_preset", "🎧 8D Audio");
-                await player.filterManager.toggleRotation(0.35);
-                presetLabel = "🎧 8D Audio";
-                break;
-            case "nightcore":
-                player.setData("hifi_active", false);
-                player.setData("eq_preset", "⚡ Nightcore");
-                await player.filterManager.toggleNightcore();
-                presetLabel = "⚡ Nightcore";
-                break;
-            case "vaporwave":
-                player.setData("hifi_active", false);
-                player.setData("eq_preset", "🌊 Vaporwave");
-                await player.filterManager.toggleVaporwave();
-                presetLabel = "🌊 Vaporwave";
-                break;
-            case "karaoke":
-                player.setData("hifi_active", false);
-                player.setData("eq_preset", "🎤 Karaoke");
-                await player.filterManager.toggleKaraoke(1, 1, 220, 100);
-                presetLabel = "🎤 Karaoke (Sing-Along)";
-                break;
-            case "reset":
-            default:
-                player.setData("hifi_active", false);
-                player.setData("eq_preset", "Normal (Flat)");
-                presetLabel = "🔄 Normal (Flat Pure Audio)";
-                break;
+    try {
+        if (!player.node || !player.node.connected) {
+            const healthyNode = Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected);
+            if (healthyNode) {
+                await player.changeNode(healthyNode, false).catch(() => { });
+            }
         }
-        await interaction.update(buildPlayerMessage(player));
-        await interaction.followUp({
-            content: `🎛️ Applied sound filter: **${presetLabel}**`,
-            ephemeral: true,
-        });
+        if (interaction.customId === "player_filter_menu") {
+            const preset = interaction.values[0];
+            await player.filterManager.resetFilters();
+            await player.filterManager.clearEQ();
+            player.setData("filter_preset_key", preset);
+            let presetLabel = "Normal (Flat)";
+            switch (preset) {
+                case "hifi":
+                    player.setData("hifi_active", true);
+                    player.setData("eq_preset", "💎 Hi-Fi Studio");
+                    await player.filterManager.setEQ(EQ_PRESETS.hifi);
+                    presetLabel = "💎 Hi-Fi Studio";
+                    break;
+                case "bassboost":
+                    player.setData("hifi_active", false);
+                    player.setData("eq_preset", "🔊 Bass Boost");
+                    await player.filterManager.setEQ(EQ_PRESETS.bassboost);
+                    presetLabel = "🔊 Bass Boost";
+                    break;
+                case "turbo":
+                    player.setData("hifi_active", false);
+                    player.setData("eq_preset", "🏎️ Turbo Rush");
+                    await player.filterManager.setSpeed(1.35);
+                    presetLabel = "🏎️ Turbo Rush (1.35x)";
+                    break;
+                case "treble":
+                    player.setData("hifi_active", false);
+                    player.setData("eq_preset", "🎤 Treble Boost");
+                    await player.filterManager.setEQ(EQ_PRESETS.treble);
+                    presetLabel = "🎤 Treble Boost";
+                    break;
+                case "8d":
+                    player.setData("hifi_active", false);
+                    player.setData("eq_preset", "🎧 8D Audio");
+                    await player.filterManager.toggleRotation(0.35);
+                    presetLabel = "🎧 8D Audio";
+                    break;
+                case "nightcore":
+                    player.setData("hifi_active", false);
+                    player.setData("eq_preset", "⚡ Nightcore");
+                    await player.filterManager.toggleNightcore();
+                    presetLabel = "⚡ Nightcore";
+                    break;
+                case "vaporwave":
+                    player.setData("hifi_active", false);
+                    player.setData("eq_preset", "🌊 Vaporwave");
+                    await player.filterManager.toggleVaporwave();
+                    presetLabel = "🌊 Vaporwave";
+                    break;
+                case "karaoke":
+                    player.setData("hifi_active", false);
+                    player.setData("eq_preset", "🎤 Karaoke");
+                    await player.filterManager.toggleKaraoke(1, 1, 220, 100);
+                    presetLabel = "🎤 Karaoke (Sing-Along)";
+                    break;
+                case "reset":
+                default:
+                    player.setData("hifi_active", false);
+                    player.setData("eq_preset", "Normal (Flat)");
+                    presetLabel = "🔄 Normal (Flat Pure Audio)";
+                    break;
+            }
+            await interaction.update(buildPlayerMessage(player));
+            await interaction.followUp({
+                content: `🎛️ Applied sound filter: **${presetLabel}**`,
+                ephemeral: true,
+            });
+        }
+    }
+    catch (err) {
+        console.error("[SelectMenu Interaction Error]:", err);
+        if (!interaction.replied && !interaction.deferred) {
+            await interaction.reply({ content: "⚠️ Filter could not be applied. Please try again.", ephemeral: true }).catch(() => { });
+        }
     }
 }

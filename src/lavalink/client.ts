@@ -11,7 +11,7 @@ import {
 import { LavalinkManager, Player, Track } from "lavalink-client";
 import { config } from "../config.js";
 import { buildPlayerMessage } from "./playerUI.js";
-import { getChannelBitrateInfo } from "../utils/formatters.js";
+import { getChannelBitrateInfo, isRelevantTrack } from "../utils/formatters.js";
 import { is247Enabled } from "../utils/twentyFourSeven.js";
 
 export let lavalink: LavalinkManager;
@@ -215,6 +215,12 @@ export function initLavalink(client: Client) {
       restrictedTrackIds.add(track.info.identifier);
     }
 
+    // If single track loop is active, disable it to prevent an infinite error loop on this failing song
+    if (player.repeatMode === "track") {
+      console.warn(`[Universal Recovery] Disabling track loop because "${track?.info.title}" failed to stream.`);
+      await player.setRepeatMode("off").catch(() => {});
+    }
+
     const failedId = track.info.identifier;
     const rawTitle = track.info.title || "";
     const recoveryAttempts = ((player.getData("recovery_attempts") as number) || 0) + 1;
@@ -266,33 +272,37 @@ export function initLavalink(client: Client) {
 
         for (const node of nodesToTry) {
           try {
-            // Strategy 1: SoundCloud (scsearch) - ZERO login restrictions & high-quality audio
-            const scRes = await node.search({ query: fallbackQuery, source: "scsearch" }, track.requester);
-            if (scRes?.tracks?.length && scRes.loadType !== "empty" && scRes.loadType !== "error") {
-              const scCandidate = scRes.tracks.find(
-                (t) => t.info.identifier !== failedId && !restrictedTrackIds.has(t.info.identifier)
-              );
-              if (scCandidate) {
-                recoveredTrack = scCandidate;
-                targetNode = node;
-                console.log(`[Universal Recovery] Found unrestricted SoundCloud alternative on node "${node.id}": "${scCandidate.info.title}"`);
-                break;
-              }
-            }
-
-            // Strategy 2: YouTube Music (ytmsearch) with cleanTitle audio - exclude failedId
+            // Strategy 1: YouTube Music / YouTube Audio - Authentic studio track, excluding failed ID & checking title relevance
             let ytRes = await node.search({ query: `${cleanTitle} audio`, source: "ytmsearch" }, track.requester);
             if (!ytRes?.tracks?.length || ytRes.loadType === "empty" || ytRes.loadType === "error") {
               ytRes = await node.search({ query: `${cleanTitle} lyrical`, source: "ytsearch" }, track.requester);
             }
             if (ytRes?.tracks?.length) {
               const ytCandidate = ytRes.tracks.find(
-                (t) => t.info.identifier !== failedId && !restrictedTrackIds.has(t.info.identifier)
+                (t) => t.info.identifier !== failedId &&
+                       !restrictedTrackIds.has(t.info.identifier) &&
+                       isRelevantTrack(t.info.title, cleanTitle)
               );
               if (ytCandidate) {
                 recoveredTrack = ytCandidate;
                 targetNode = node;
-                console.log(`[Universal Recovery] Found alternative YouTube stream on node "${node.id}": "${ytCandidate.info.title}"`);
+                console.log(`[Universal Recovery] Found authentic alternative YouTube audio on node "${node.id}": "${ytCandidate.info.title}"`);
+                break;
+              }
+            }
+
+            // Strategy 2: SoundCloud (scsearch) with STRICT title matching (never accept unrelated DJ sets)
+            const scRes = await node.search({ query: fallbackQuery, source: "scsearch" }, track.requester);
+            if (scRes?.tracks?.length && scRes.loadType !== "empty" && scRes.loadType !== "error") {
+              const scCandidate = scRes.tracks.find(
+                (t) => t.info.identifier !== failedId &&
+                       !restrictedTrackIds.has(t.info.identifier) &&
+                       isRelevantTrack(t.info.title, cleanTitle)
+              );
+              if (scCandidate) {
+                recoveredTrack = scCandidate;
+                targetNode = node;
+                console.log(`[Universal Recovery] Found verified SoundCloud alternative on node "${node.id}": "${scCandidate.info.title}"`);
                 break;
               }
             }

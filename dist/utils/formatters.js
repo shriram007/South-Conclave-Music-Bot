@@ -125,3 +125,29 @@ export function getChannelBitrateInfo(channel) {
         recommendation,
     };
 }
+/**
+ * Verifies that a search result or fallback candidate is genuinely relevant to the requested song.
+ * Prevents playing completely unrelated DJ sets, podcasts, or mixes.
+ */
+export function isRelevantTrack(candidateTitle, targetTitle) {
+    if (!candidateTitle || !targetTitle)
+        return false;
+    const normalize = (s) => s
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}\s]/gu, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    const normTarget = normalize(targetTitle);
+    const normCandidate = normalize(candidateTitle);
+    // Common noise words in titles
+    const noise = new Set([
+        "from", "song", "video", "official", "audio", "lyric", "lyrical",
+        "full", "movie", "the", "and", "with", "track", "music", "original",
+    ]);
+    const targetTokens = normTarget.split(" ").filter((w) => w.length >= 3 && !noise.has(w));
+    if (targetTokens.length === 0) {
+        return normCandidate.includes(normTarget);
+    }
+    // The candidate must match at least one significant keyword (e.g. "kannamma")
+    return targetTokens.some((token) => normCandidate.includes(token));
+}
