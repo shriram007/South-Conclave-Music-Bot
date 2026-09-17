@@ -2,10 +2,14 @@
  * Automatically deletes an interaction reply after a set delay (default: 6 seconds)
  * Keeps the music channel pristine and free of command clutter
  */
-export function autoDeleteReply(interaction, delayMs = 6000) {
+export function autoDeleteReply(interaction, delayMs = 8000) {
     setTimeout(async () => {
         try {
-            await interaction.deleteReply().catch(() => { });
+            if (interaction?.ephemeral)
+                return;
+            if (typeof interaction?.deleteReply === "function") {
+                await interaction.deleteReply().catch(() => { });
+            }
         }
         catch { }
     }, delayMs);

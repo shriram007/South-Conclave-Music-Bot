@@ -5,12 +5,15 @@ import { ChatInputCommandInteraction, Message } from "discord.js";
  * Keeps the music channel pristine and free of command clutter
  */
 export function autoDeleteReply(
-  interaction: ChatInputCommandInteraction,
-  delayMs: number = 6000
+  interaction: ChatInputCommandInteraction | any,
+  delayMs: number = 8000
 ): void {
   setTimeout(async () => {
     try {
-      await interaction.deleteReply().catch(() => {});
+      if (interaction?.ephemeral) return;
+      if (typeof interaction?.deleteReply === "function") {
+        await interaction.deleteReply().catch(() => {});
+      }
     } catch {}
   }, delayMs);
 }

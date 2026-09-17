@@ -1,5 +1,6 @@
 import { EmbedBuilder, SlashCommandBuilder, } from "discord.js";
 import { getOrCreatePlayer, lavalink, restrictedTrackIds, updateActivePlayerMessage } from "../lavalink/client.js";
+import { autoDeleteReply } from "../utils/cleanup.js";
 import { formatDuration, getSourceInfo } from "../utils/formatters.js";
 async function resolveSpotifyTrack(url) {
     try {
@@ -252,10 +253,12 @@ export const playCommand = {
             }
             if (!res || !res.tracks || res.tracks.length === 0 || res.loadType === "empty") {
                 await interaction.editReply(`❌ No tracks found for: \`${rawQuery}\``);
+                autoDeleteReply(interaction, 10000);
                 return;
             }
             if (res.loadType === "error") {
                 await interaction.editReply(`⚠️ An error occurred while searching: ${res.exception?.message || "Unknown error"}`);
+                autoDeleteReply(interaction, 10000);
                 return;
             }
             // Check if the user explicitly provided a genuine Playlist or Album URL (not an algorithmic mix)
@@ -288,6 +291,7 @@ export const playCommand = {
                     embed.setThumbnail(res.playlist.thumbnail);
                 }
                 await interaction.editReply({ embeds: [embed] });
+                autoDeleteReply(interaction, 12000);
                 return;
             }
             // Single track or search result
@@ -301,6 +305,7 @@ export const playCommand = {
             if (!player.playing && !player.paused) {
                 await player.play();
                 await interaction.editReply(`▶️ Playing **[${track.info.title}](${track.info.uri})** by **${track.info.author}**`);
+                autoDeleteReply(interaction, 10000);
             }
             else {
                 await updateActivePlayerMessage(player);
@@ -345,11 +350,13 @@ export const playCommand = {
                     embed.setThumbnail(track.info.artworkUrl);
                 }
                 await interaction.editReply({ embeds: [embed] });
+                autoDeleteReply(interaction, 12000);
             }
         }
         catch (err) {
             console.error("[Play Command] Search error:", err);
             await interaction.editReply(`⚠️ Failed to play track: ${err.message || "Unknown error"}`);
+            autoDeleteReply(interaction, 10000);
         }
     },
 };

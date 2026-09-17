@@ -17,9 +17,15 @@ export const nowplayingCommand = {
     }
 
     const playerMsg = buildPlayerMessage(player);
+    const oldMsgId = activePlayerMessages.get(interaction.guildId!) || (player.getData("active_message_id") as string | undefined);
     const reply = await interaction.reply({ ...playerMsg, withResponse: true });
     const replyMsg = reply.resource?.message || (await interaction.fetchReply());
     activePlayerMessages.set(interaction.guildId!, replyMsg.id);
     player.setData("active_message_id", replyMsg.id);
+
+    // Delete the previous player card so there is only ever one active player card in chat
+    if (oldMsgId && oldMsgId !== replyMsg.id && interaction.channel) {
+      interaction.channel.messages.fetch(oldMsgId).then((m) => m?.delete().catch(() => {})).catch(() => {});
+    }
   },
 };

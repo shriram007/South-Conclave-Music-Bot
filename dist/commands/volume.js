@@ -1,5 +1,6 @@
 import { SlashCommandBuilder, } from "discord.js";
 import { lavalink, updateActivePlayerMessage, validateVoiceGate } from "../lavalink/client.js";
+import { autoDeleteReply } from "../utils/cleanup.js";
 export const volumeCommand = {
     data: new SlashCommandBuilder()
         .setName("volume")
@@ -28,5 +29,6 @@ export const volumeCommand = {
         else if (vol < 50)
             icon = "🔉";
         await interaction.reply(`${icon} Volume adjusted to **${vol}%**`);
+        autoDeleteReply(interaction, 8000);
     },
 };

@@ -1,6 +1,7 @@
 import { EmbedBuilder, } from "discord.js";
 import { LavalinkManager } from "lavalink-client";
 import { buildPlayerMessage } from "./playerUI.js";
+import { autoDeleteMessage } from "../utils/cleanup.js";
 import { getChannelBitrateInfo, isRelevantTrack } from "../utils/formatters.js";
 import { is247Enabled } from "../utils/twentyFourSeven.js";
 export let lavalink;
@@ -123,7 +124,7 @@ export function initLavalink(client) {
                     if (!bitrateInfo.isMaxQuality) {
                         channel.send({
                             content: bitrateInfo.recommendation,
-                        }).catch(() => { });
+                        }).then((msg) => autoDeleteMessage(msg, 12000)).catch(() => { });
                     }
                 }
             }
