@@ -116,23 +116,20 @@ export function initLavalink(client: Client) {
       const prevMessageId = activePlayerMessages.get(player.guildId) || (player.getData("active_message_id") as string | undefined);
       const playerMsgOptions = buildPlayerMessage(player, track);
 
-      let editedExisting = false;
+      // Clean up previous Now Playing card so the new song gets a fresh announcement card at the bottom
       if (prevMessageId) {
         try {
           const prevMsg = channel.messages.cache.get(prevMessageId) || (await channel.messages.fetch(prevMessageId).catch(() => null));
           if (prevMsg) {
-            await prevMsg.edit(playerMsgOptions);
-            editedExisting = true;
+            await prevMsg.delete().catch(() => {});
           }
         } catch {}
       }
 
-      // If there was no existing player message to edit (e.g. freshly started playback), send a new one
-      if (!editedExisting) {
-        const sentMsg = await channel.send(playerMsgOptions);
-        activePlayerMessages.set(player.guildId, sentMsg.id);
-        player.setData("active_message_id", sentMsg.id);
-      }
+      // Always send a fresh, prominent Now Playing card at the bottom of the chat for new songs
+      const sentMsg = await channel.send(playerMsgOptions);
+      activePlayerMessages.set(player.guildId, sentMsg.id);
+      player.setData("active_message_id", sentMsg.id);
 
       // Start live progress bar updates
       startLivePlayerTicker(player);
