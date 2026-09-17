@@ -35,6 +35,7 @@ export const helpCommand = {
                     "`/quality` — Check current voice channel bitrate & audio pipeline specs\n" +
                     "`/queue [page]` — View upcoming queued songs and total time\n" +
                     "`/nowplaying` — Show interactive controller card with buttons\n" +
+                    "`/lyrics [song]` — Look up lyrics for current song or any title\n" +
                     "`/help` — Show this guide",
             },
             {

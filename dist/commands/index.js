@@ -7,6 +7,7 @@ import { filterCommand } from "./filters.js";
 import { qualityCommand } from "./quality.js";
 import { helpCommand } from "./help.js";
 import { twentyFourSevenCommand } from "./twentyFourSeven.js";
+import { lyricsCommand } from "./lyrics.js";
 export const commands = [
     playCommand,
     pauseCommand,
@@ -21,6 +22,7 @@ export const commands = [
     seekCommand,
     queueCommand,
     nowplayingCommand,
+    lyricsCommand,
     volumeCommand,
     filterCommand,
     qualityCommand,
