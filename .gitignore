@@ -36,3 +36,4 @@ yarn-debug.log*
 # Local Runtime Data
 data/*.json
 !data/.gitkeep
+*.zip

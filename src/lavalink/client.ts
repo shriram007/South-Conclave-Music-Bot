@@ -23,13 +23,6 @@ export function initLavalink(client: Client) {
   lavalink = new LavalinkManager({
     nodes: [
       {
-        authorization: "https://seretia.link/discord",
-        host: "lavalinkv4.serenetia.com",
-        port: 443,
-        secure: true,
-        id: "Serenetia-HighSpeed",
-      },
-      {
         authorization: config.lavalink.password,
         host: config.lavalink.host,
         port: config.lavalink.port,
