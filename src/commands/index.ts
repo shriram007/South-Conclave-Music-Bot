@@ -21,6 +21,7 @@ import { prefixCommand } from "./prefix.js";
 import { twentyFourSevenCommand } from "./twentyFourSeven.js";
 import { lyricsCommand } from "./lyrics.js";
 import { cleanCommand } from "./clean.js";
+import { pingCommand } from "./ping.js";
 
 export const commands = [
   playCommand,
@@ -42,6 +43,7 @@ export const commands = [
   qualityCommand,
   helpCommand,
   cleanCommand,
+  pingCommand, // Hidden from /help command as requested
   // prefixCommand, // Hidden for now (requires Privileged Message Content Intent)
   twentyFourSevenCommand,
 ];
