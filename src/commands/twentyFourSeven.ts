@@ -63,6 +63,8 @@ export const twentyFourSevenCommand = {
           selfDeaf: true,
           selfMute: false,
           volume: 100,
+          instaUpdateFiltersFix: true,
+          applyVolumeAsFilter: false,
         });
       }
 

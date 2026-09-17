@@ -80,6 +80,8 @@ export async function rejoin247Channels(client) {
                     selfDeaf: true,
                     selfMute: false,
                     volume: 100,
+                    instaUpdateFiltersFix: true,
+                    applyVolumeAsFilter: false,
                 });
             }
             if (!player.connected) {

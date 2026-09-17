@@ -1,7 +1,7 @@
 import { EmbedBuilder, SlashCommandBuilder, } from "discord.js";
 import { getOrCreatePlayer, lavalink, restrictedTrackIds, updateActivePlayerMessage } from "../lavalink/client.js";
 import { autoDeleteReply } from "../utils/cleanup.js";
-import { formatDuration, getSourceInfo } from "../utils/formatters.js";
+import { formatDuration, getSourceInfo, isRelevantTrack } from "../utils/formatters.js";
 async function resolveSpotifyTrack(url) {
     try {
         const cleanUrl = url.split("?")[0];
@@ -113,26 +113,12 @@ async function smartSearch(player, query, isUrl, user) {
             console.warn(`[SmartSearch] ytmsearch on "${node.id}" failed:`, e?.message);
         }
     }
-    // 2. Try SoundCloud search (scsearch) - ZERO YouTube login walls, fast & unrestricted
-    for (const node of nodesToTry) {
-        try {
-            const res = await node.search({ query, source: "scsearch" }, user);
-            if (res?.tracks?.length && res.loadType !== "empty" && res.loadType !== "error") {
-                const viable = res.tracks.filter((t) => !restrictedTrackIds.has(t.info.identifier));
-                if (viable.length > 0) {
-                    console.log(`[SmartSearch] Found "${viable[0].info.title}" via scsearch on node "${node.id}"`);
-                    return { ...res, tracks: viable };
-                }
-            }
-        }
-        catch { }
-    }
-    // 3. Try YouTube search appending "audio" (favors clean audio streams over age-gated music videos)
+    // 2. Try YouTube search appending "audio" (favors authentic studio tracks over age-gated music videos)
     for (const node of nodesToTry) {
         try {
             const res = await node.search({ query: `${query} audio`, source: "ytsearch" }, user);
             if (res?.tracks?.length && res.loadType !== "empty" && res.loadType !== "error") {
-                const viable = res.tracks.filter((t) => !restrictedTrackIds.has(t.info.identifier));
+                const viable = res.tracks.filter((t) => !restrictedTrackIds.has(t.info.identifier) && isRelevantTrack(t.info.title, query));
                 if (viable.length > 0) {
                     console.log(`[SmartSearch] Found "${viable[0].info.title}" via ytsearch (audio) on node "${node.id}"`);
                     return { ...res, tracks: viable };
@@ -141,7 +127,21 @@ async function smartSearch(player, query, isUrl, user) {
         }
         catch { }
     }
-    // 4. Standard ytsearch
+    // 3. Try SoundCloud search (scsearch) - ZERO YouTube login walls, fast & unrestricted, verified relevance
+    for (const node of nodesToTry) {
+        try {
+            const res = await node.search({ query, source: "scsearch" }, user);
+            if (res?.tracks?.length && res.loadType !== "empty" && res.loadType !== "error") {
+                const viable = res.tracks.filter((t) => !restrictedTrackIds.has(t.info.identifier) && isRelevantTrack(t.info.title, query));
+                if (viable.length > 0) {
+                    console.log(`[SmartSearch] Found "${viable[0].info.title}" via scsearch on node "${node.id}"`);
+                    return { ...res, tracks: viable };
+                }
+            }
+        }
+        catch { }
+    }
+    // 4. Standard ytsearch fallback
     for (const node of nodesToTry) {
         try {
             const res = await node.search({ query, source: "ytsearch" }, user);

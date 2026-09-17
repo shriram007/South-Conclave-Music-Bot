@@ -53,10 +53,15 @@ export function initLavalink(client) {
         },
         autoSkip: true,
         autoMove: true,
+        autoSkipOnResolveError: true,
         playerOptions: {
             clientBasedPositionUpdateInterval: 150, // 150ms position accuracy for ultra-smooth timestamps
             defaultSearchPlatform: "ytmsearch", // YouTube Music HQ 256k as default
             volumeDecrementer: 1,
+            maxErrorsPerTime: {
+                threshold: 60000,
+                maxAmount: 25,
+            },
             onDisconnect: {
                 autoReconnect: true,
                 destroyPlayer: false,
@@ -189,6 +194,16 @@ export function initLavalink(client) {
         stopLivePlayerTicker(player.guildId);
         activePlayerMessages.delete(player.guildId);
     });
+    lavalink.on("trackStuck", async (player, track, payload) => {
+        console.warn(`[Lavalink] Audio stream stuck for "${track?.info.title}" (${payload.thresholdMs}ms threshold). Seamlessly auto-skipping...`);
+        if (player.textChannelId) {
+            const channel = client.channels.cache.get(player.textChannelId);
+            channel?.send({
+                content: `⚠️ Audio stream stalled for **${track?.info.title || "track"}**. Skipping ahead smoothly...`,
+            }).then((msg) => autoDeleteMessage(msg, 6000)).catch(() => { });
+        }
+        await player.skip().catch(() => { });
+    });
     lavalink.on("trackError", async (player, track, payload) => {
         const errorMsg = payload?.exception?.message || JSON.stringify(payload);
         console.error(`[Lavalink] Error playing "${track?.info.title}":`, errorMsg);
@@ -214,7 +229,7 @@ export function initLavalink(client) {
             player.setData("recovering_track", false);
             if (player.textChannelId) {
                 const channel = client.channels.cache.get(player.textChannelId);
-                channel?.send(`⚠️ **Stream Restricted by YouTube:** All video streams for **${rawTitle}** require Google login. Skipping to next song in queue.`).catch(() => { });
+                channel?.send(`⚠️ **Stream Restricted by Provider:** Video stream for **${rawTitle}** requires authorization. Skipping forward...`).then((msg) => autoDeleteMessage(msg, 7000)).catch(() => { });
             }
             await player.skip().catch(() => { });
             return;
@@ -237,10 +252,10 @@ export function initLavalink(client) {
                 const cleanAuthor = (track.info.author || "").replace(/- Topic/gi, "").trim();
                 const fallbackQuery = `${cleanTitle} ${cleanAuthor}`.trim();
                 console.log(`[Universal Recovery] Stream restricted for "${rawTitle}" (ID: ${failedId}). Attempt #${recoveryAttempts} auto-recovering as "${fallbackQuery}"...`);
-                // Check alternate connected nodes first if the current node had the playback failure
+                // Prioritize current connected node FIRST to prevent transatlantic player migration churn!
                 const connectedNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected);
-                const alternateNodes = connectedNodes.filter((n) => n.id !== player.node.id);
-                const nodesToTry = [...alternateNodes, player.node];
+                const otherNodes = connectedNodes.filter((n) => n.id !== player.node.id);
+                const nodesToTry = player.node.connected ? [player.node, ...otherNodes] : otherNodes;
                 let recoveredTrack = null;
                 let targetNode = player.node;
                 for (const node of nodesToTry) {
@@ -291,7 +306,7 @@ export function initLavalink(client) {
                     await player.play({ clientTrack: recoveredTrack, noReplace: false });
                     if (player.textChannelId) {
                         const channel = client.channels.cache.get(player.textChannelId);
-                        channel?.send(`🔄 **Auto-Recovered:** Login restriction detected on video. Swapped to high-fidelity stream: **[${recoveredTrack.info.title}](${recoveredTrack.info.uri})**`).catch(() => { });
+                        channel?.send(`🔄 **Auto-Recovered:** Restriction detected on video. Swapped to high-fidelity stream: **[${recoveredTrack.info.title}](${recoveredTrack.info.uri})**`).then((msg) => autoDeleteMessage(msg, 6000)).catch(() => { });
                     }
                     setTimeout(() => {
                         player.setData("recovering_track", false);
@@ -311,7 +326,7 @@ export function initLavalink(client) {
             return;
         const channel = client.channels.cache.get(player.textChannelId);
         if (channel) {
-            channel.send(`⚠️ Error playing **${track?.info.title || "track"}**: ${payload.exception?.message || "Audio stream error"}`).catch(() => { });
+            channel.send(`⚠️ Error playing **${track?.info.title || "track"}**: ${payload.exception?.message || "Audio stream error"}`).then((msg) => autoDeleteMessage(msg, 8000)).catch(() => { });
         }
     });
     return lavalink;
@@ -357,6 +372,8 @@ export async function getOrCreatePlayer(interaction) {
             selfDeaf: true,
             selfMute: false,
             volume: 100,
+            instaUpdateFiltersFix: true,
+            applyVolumeAsFilter: false,
         });
         player.setData("hifi_active", false);
         player.setData("eq_preset", "Normal (Flat)");

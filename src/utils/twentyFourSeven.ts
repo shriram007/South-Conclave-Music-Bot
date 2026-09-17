@@ -93,6 +93,8 @@ export async function rejoin247Channels(client: Client): Promise<void> {
           selfDeaf: true,
           selfMute: false,
           volume: 100,
+          instaUpdateFiltersFix: true,
+          applyVolumeAsFilter: false,
         });
       }
 
