@@ -5,6 +5,8 @@ import { buildPlayerMessage } from "./playerUI.js";
 import { autoDeleteMessage } from "../utils/cleanup.js";
 import { getChannelBitrateInfo, isRelevantTrack } from "../utils/formatters.js";
 import { is247Enabled } from "../utils/twentyFourSeven.js";
+import { clearGuildSession, saveActiveSessions } from "../utils/sessionRecovery.js";
+import { applyLoudnessNormalization } from "../commands/normalize.js";
 export let lavalink;
 export let discordClient;
 // Track active player messages so we can update or clean them up
@@ -292,6 +294,12 @@ export function initLavalink(client) {
             activePlayerMessages.set(player.guildId, sentMsg.id);
             playerMessageCache.set(player.guildId, sentMsg);
             player.setData("active_message_id", sentMsg.id);
+            // Checkpoint session state to disk
+            saveActiveSessions();
+            // Maintain loudness normalization if enabled
+            if (player.getData("normalized")) {
+                applyLoudnessNormalization(player, true).catch(() => { });
+            }
             // Start live progress bar updates
             startLivePlayerTicker(player);
             // Check voice channel bitrate quality and warn if low
@@ -448,6 +456,7 @@ export function initLavalink(client) {
             activePlayerMessages.delete(player.guildId);
             playerMessageCache.delete(player.guildId);
             player.setData("active_message_id", null);
+            clearGuildSession(player.guildId);
         }
     });
     lavalink.on("trackEnd", (player, track, payload) => {
@@ -460,6 +469,7 @@ export function initLavalink(client) {
         stopLivePlayerTicker(player.guildId);
         activePlayerMessages.delete(player.guildId);
         playerMessageCache.delete(player.guildId);
+        clearGuildSession(player.guildId);
     });
     lavalink.on("trackStuck", async (player, track, payload) => {
         console.warn(`[Lavalink] Audio stream stuck for "${track?.info.title}" (${payload.thresholdMs}ms threshold). Seamlessly auto-skipping...`);

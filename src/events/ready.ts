@@ -5,6 +5,7 @@ import { lavalink } from "../lavalink/client.js";
 import { loadPrefixes } from "../utils/prefixes.js";
 import { load247, rejoin247Channels } from "../utils/twentyFourSeven.js";
 import { loadFavorites } from "../utils/favorites.js";
+import { restoreSessions, startSessionAutoSave } from "../utils/sessionRecovery.js";
 
 export async function onReady(client: Client) {
   if (!client.user) return;
@@ -35,9 +36,11 @@ export async function onReady(client: Client) {
     username: client.user.username,
   });
 
-  // Automatically rejoin 24/7 voice channels once Lavalink node connects
+  // Automatically restore active sessions and rejoin 24/7 channels once Lavalink node connects
   lavalink.nodeManager.once("connect", async () => {
+    await restoreSessions(client);
     await rejoin247Channels(client);
+    startSessionAutoSave();
   });
 
   // Register Slash Commands

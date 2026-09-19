@@ -265,12 +265,35 @@ export const removeCommand = {
         .addStringOption((opt) => opt
         .setName("track")
         .setDescription("Track number, comma list, or range (e.g. '3', '1, 3, 5', '2-6', '2 to 6')")
-        .setRequired(true))
+        .setRequired(true)
+        .setAutocomplete(true))
         .addIntegerOption((opt) => opt
         .setName("to")
         .setDescription("Optional end position if removing a range (e.g. track: 2, to: 5)")
         .setRequired(false)
         .setMinValue(1)),
+    async autocomplete(interaction) {
+        const player = lavalink.getPlayer(interaction.guildId);
+        if (!player || player.queue.tracks.length === 0) {
+            return interaction.respond([]);
+        }
+        const focusedValue = interaction.options.getFocused().toLowerCase();
+        const tracks = player.queue.tracks;
+        const choices = [];
+        for (let i = 0; i < tracks.length; i++) {
+            if (choices.length >= 25)
+                break;
+            const t = tracks[i];
+            const title = t.info.title.substring(0, 50);
+            const author = t.info.author ? ` - ${t.info.author.substring(0, 25)}` : "";
+            const dur = t.info.duration ? ` [${formatDuration(t.info.duration)}]` : "";
+            const label = `#${i + 1}: ${title}${author}${dur}`.substring(0, 100);
+            if (!focusedValue || label.toLowerCase().includes(focusedValue) || `${i + 1}`.startsWith(focusedValue)) {
+                choices.push({ name: label, value: `${i + 1}` });
+            }
+        }
+        await interaction.respond(choices);
+    },
     async execute(interaction) {
         const player = await getPlayerWithGate(interaction);
         if (!player)

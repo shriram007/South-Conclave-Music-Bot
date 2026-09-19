@@ -12,11 +12,16 @@ import { cleanCommand } from "./clean.js";
 import { pingCommand } from "./ping.js";
 import { favoritesCommand } from "./favorites.js";
 import { autoplayCommand } from "./autoplay.js";
+import { skiptoCommand } from "./skipto.js";
+import { moveCommand } from "./move.js";
+import { normalizeCommand } from "./normalize.js";
 export const commands = [
     playCommand,
     pauseCommand,
     resumeCommand,
     skipCommand,
+    skiptoCommand,
+    moveCommand,
     removeCommand,
     clearCommand,
     previousCommand,
@@ -29,6 +34,7 @@ export const commands = [
     lyricsCommand,
     volumeCommand,
     filterCommand,
+    normalizeCommand,
     qualityCommand,
     helpCommand,
     cleanCommand,

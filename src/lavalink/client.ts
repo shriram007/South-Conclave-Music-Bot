@@ -15,6 +15,8 @@ import { buildPlayerMessage } from "./playerUI.js";
 import { autoDeleteMessage } from "../utils/cleanup.js";
 import { getChannelBitrateInfo, isRelevantTrack } from "../utils/formatters.js";
 import { is247Enabled } from "../utils/twentyFourSeven.js";
+import { clearGuildSession, saveActiveSessions } from "../utils/sessionRecovery.js";
+import { applyLoudnessNormalization } from "../commands/normalize.js";
 
 export let lavalink: LavalinkManager;
 export let discordClient: Client;
@@ -330,6 +332,14 @@ export function initLavalink(client: Client) {
       playerMessageCache.set(player.guildId, sentMsg);
       player.setData("active_message_id", sentMsg.id);
 
+      // Checkpoint session state to disk
+      saveActiveSessions();
+
+      // Maintain loudness normalization if enabled
+      if (player.getData("normalized")) {
+        applyLoudnessNormalization(player, true).catch(() => {});
+      }
+
       // Start live progress bar updates
       startLivePlayerTicker(player);
 
@@ -502,6 +512,7 @@ export function initLavalink(client: Client) {
       activePlayerMessages.delete(player.guildId);
       playerMessageCache.delete(player.guildId);
       player.setData("active_message_id", null);
+      clearGuildSession(player.guildId);
     }
   });
 
@@ -516,6 +527,7 @@ export function initLavalink(client: Client) {
     stopLivePlayerTicker(player.guildId);
     activePlayerMessages.delete(player.guildId);
     playerMessageCache.delete(player.guildId);
+    clearGuildSession(player.guildId);
   });
 
   lavalink.on("trackStuck", async (player: Player, track, payload) => {
