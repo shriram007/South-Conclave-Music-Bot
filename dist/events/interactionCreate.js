@@ -3,6 +3,7 @@ import { commandMap } from "../commands/index.js";
 import { fetchSongLyrics } from "../commands/lyrics.js";
 import { clearAllFilters, getBestNode, isNodeHealthy, lavalink, markNodeDegraded, smoothFadePause, smoothFadeResume, updateActivePlayerMessage, validateVoiceGate, } from "../lavalink/client.js";
 import { buildPlayerMessage } from "../lavalink/playerUI.js";
+import { buildQueueMessage } from "../lavalink/queueUI.js";
 import { autoDeleteMessage } from "../utils/cleanup.js";
 import { EQ_PRESETS } from "../utils/equalizer.js";
 import { toggleFavorite } from "../utils/favorites.js";
@@ -77,13 +78,20 @@ async function handleButtonInteraction(interaction) {
             ephemeral: true,
         });
     }
-    // Voice Gate: strictly block anyone who is not in the same voice channel
-    const gate = await validateVoiceGate(interaction, player);
-    if (!gate.allowed) {
-        return interaction.reply({
-            content: gate.error,
-            ephemeral: true,
-        });
+    // Voice Gate: strictly block anyone who is not in the same voice channel (allow passive inspection)
+    const isPassiveInspection = interaction.customId === "player_queue" ||
+        interaction.customId === "player_lyrics" ||
+        interaction.customId === "qm_close" ||
+        interaction.customId.startsWith("qm_prev") ||
+        interaction.customId.startsWith("qm_next");
+    if (!isPassiveInspection) {
+        const gate = await validateVoiceGate(interaction, player);
+        if (!gate.allowed) {
+            return interaction.reply({
+                content: gate.error,
+                ephemeral: true,
+            });
+        }
     }
     // Acknowledge Discord immediately to eliminate the 3-second timeout ("didn't respond in time")
     if (interaction.customId === "player_queue" || interaction.customId === "player_lyrics") {
@@ -103,6 +111,100 @@ async function handleButtonInteraction(interaction) {
             if (healthyNode && healthyNode.id !== player.node?.id) {
                 console.log(`[Failover] Player's current node (${player.node?.id || "none"}) is disconnected or degraded. Migrating to "${healthyNode.id}"...`);
                 await player.changeNode(healthyNode, false).catch(() => { });
+            }
+        }
+        // Interactive Queue Manager Actions (qm_<action>_<page>_<selected>)
+        if (interaction.customId.startsWith("qm_")) {
+            if (interaction.customId === "qm_close") {
+                await interaction.deleteReply().catch(async () => {
+                    await interaction.editReply({ content: "🗑️ Queue closed.", embeds: [], components: [] }).catch(() => { });
+                });
+                return;
+            }
+            const parts = interaction.customId.split("_");
+            const action = parts[1];
+            const page = parseInt(parts[2], 10) || 0;
+            const selected = parseInt(parts[3], 10) || 0;
+            const targetIdx = page * 5 + selected;
+            switch (action) {
+                case "prev": {
+                    const newPage = Math.max(0, page - 1);
+                    const queueMsg = buildQueueMessage(player, newPage, 0, interaction.user.username);
+                    await interaction.editReply(queueMsg).catch(() => { });
+                    return;
+                }
+                case "next": {
+                    const newPage = page + 1;
+                    const queueMsg = buildQueueMessage(player, newPage, 0, interaction.user.username);
+                    await interaction.editReply(queueMsg).catch(() => { });
+                    return;
+                }
+                case "remove": {
+                    if (targetIdx >= 0 && targetIdx < player.queue.tracks.length) {
+                        player.queue.tracks.splice(targetIdx, 1);
+                        await updateActivePlayerMessage(player, true);
+                    }
+                    const maxTracksOnPage = Math.max(0, player.queue.tracks.length - page * 5);
+                    const newSelected = Math.min(selected, Math.max(0, maxTracksOnPage - 1));
+                    const queueMsg = buildQueueMessage(player, page, newSelected, interaction.user.username);
+                    await interaction.editReply(queueMsg).catch(() => { });
+                    return;
+                }
+                case "moveup": {
+                    let newPage = page;
+                    let newSelected = selected;
+                    if (targetIdx > 0 && targetIdx < player.queue.tracks.length) {
+                        const [track] = player.queue.tracks.splice(targetIdx, 1);
+                        player.queue.tracks.splice(targetIdx - 1, 0, track);
+                        newSelected = selected - 1;
+                        if (newSelected < 0 && newPage > 0) {
+                            newPage--;
+                            newSelected = 4;
+                        }
+                        await updateActivePlayerMessage(player, true);
+                    }
+                    const queueMsg = buildQueueMessage(player, newPage, newSelected, interaction.user.username);
+                    await interaction.editReply(queueMsg).catch(() => { });
+                    return;
+                }
+                case "movedown": {
+                    let newPage = page;
+                    let newSelected = selected;
+                    if (targetIdx >= 0 && targetIdx < player.queue.tracks.length - 1) {
+                        const [track] = player.queue.tracks.splice(targetIdx, 1);
+                        player.queue.tracks.splice(targetIdx + 1, 0, track);
+                        newSelected = selected + 1;
+                        if (newSelected >= 5) {
+                            newPage++;
+                            newSelected = 0;
+                        }
+                        await updateActivePlayerMessage(player, true);
+                    }
+                    const queueMsg = buildQueueMessage(player, newPage, newSelected, interaction.user.username);
+                    await interaction.editReply(queueMsg).catch(() => { });
+                    return;
+                }
+                case "top": {
+                    if (targetIdx > 0 && targetIdx < player.queue.tracks.length) {
+                        const [track] = player.queue.tracks.splice(targetIdx, 1);
+                        player.queue.tracks.unshift(track);
+                        await updateActivePlayerMessage(player, true);
+                    }
+                    const queueMsg = buildQueueMessage(player, 0, 0, interaction.user.username);
+                    await interaction.editReply(queueMsg).catch(() => { });
+                    return;
+                }
+                case "play": {
+                    if (targetIdx >= 0 && targetIdx < player.queue.tracks.length) {
+                        const [track] = player.queue.tracks.splice(targetIdx, 1);
+                        player.queue.tracks.unshift(track);
+                        await player.skip();
+                        await updateActivePlayerMessage(player, true);
+                    }
+                    const queueMsg = buildQueueMessage(player, 0, 0, interaction.user.username);
+                    await interaction.editReply(queueMsg).catch(() => { });
+                    return;
+                }
             }
         }
         switch (interaction.customId) {
@@ -326,30 +428,8 @@ async function handleButtonInteraction(interaction) {
                 break;
             }
             case "player_queue": {
-                const current = player.queue.current;
-                const upcoming = player.queue.tracks;
-                if (!current && upcoming.length === 0) {
-                    return interaction.editReply({ content: "⚠️ The queue is currently empty." });
-                }
-                const embed = new EmbedBuilder()
-                    .setColor(0x5865f2)
-                    .setTitle("📋 Upcoming Queue")
-                    .setDescription(current
-                    ? `**Now Playing:**\n🎶 [${current.info.title}](${current.info.uri}) • \`[${formatDuration(current.info.duration || 0)}]\``
-                    : "No song currently playing.");
-                if (upcoming.length > 0) {
-                    const list = upcoming.slice(0, 5).map((t, idx) => {
-                        const req = t.requester;
-                        const reqTag = req?.username ? ` • @${req.username}` : "";
-                        return `**${idx + 1}.** [${t.info.title}](${t.info.uri}) \`[${formatDuration(t.info.duration || 0)}]\`${reqTag}`;
-                    }).join("\n\n");
-                    const extra = upcoming.length > 5 ? `\n\n*...and ${upcoming.length - 5} more track(s)*` : "";
-                    embed.addFields([{ name: "Up Next", value: list + extra }]);
-                }
-                else {
-                    embed.addFields([{ name: "Up Next", value: "No more tracks in queue. Add more with `/play`!" }]);
-                }
-                return interaction.editReply({ embeds: [embed] });
+                const queueMsg = buildQueueMessage(player, 0, 0, interaction.user.username);
+                return interaction.editReply(queueMsg);
             }
             case "player_lyrics": {
                 const current = player.queue.current;
@@ -458,9 +538,11 @@ async function handleSelectMenuInteraction(interaction) {
     if (!player) {
         return interaction.reply({ content: "❌ No active music session found.", ephemeral: true });
     }
-    const gate = await validateVoiceGate(interaction, player);
-    if (!gate.allowed) {
-        return interaction.reply({ content: gate.error, ephemeral: true });
+    if (!interaction.customId.startsWith("qm_select")) {
+        const gate = await validateVoiceGate(interaction, player);
+        if (!gate.allowed) {
+            return interaction.reply({ content: gate.error, ephemeral: true });
+        }
     }
     // Acknowledge Discord immediately
     await interaction.deferUpdate().catch(() => { });
@@ -471,6 +553,14 @@ async function handleSelectMenuInteraction(interaction) {
             if (healthyNode && healthyNode.id !== player.node?.id) {
                 await player.changeNode(healthyNode, false).catch(() => { });
             }
+        }
+        // Queue Manager: Switch selected track on current page
+        if (interaction.customId.startsWith("qm_select_")) {
+            const page = parseInt(interaction.customId.split("_")[2], 10) || 0;
+            const selectedIndex = parseInt(interaction.values[0], 10) || 0;
+            const queueMsg = buildQueueMessage(player, page, selectedIndex, interaction.user.username);
+            await interaction.editReply(queueMsg).catch(() => { });
+            return;
         }
         if (interaction.customId === "player_filter_menu") {
             const preset = interaction.values[0];

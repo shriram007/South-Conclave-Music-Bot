@@ -30,7 +30,7 @@ async function resolveSpotifyTrack(url) {
     }
     return null;
 }
-async function resolveTrackQuery(rawQuery) {
+export async function resolveTrackQuery(rawQuery) {
     let trimmed = rawQuery.trim();
     // If it's a YouTube watch URL with an auto-generated mix (&list=RD... or &list=UL...), strip the mix list param so it only plays the selected track
     if (trimmed.includes("youtube.com/watch") && trimmed.includes("v=")) {
@@ -65,7 +65,7 @@ async function resolveTrackQuery(rawQuery) {
  * 3. Tries SoundCloud (purity, no YouTube login wall)
  * 4. Tries clean YouTube audio streams (filtering out video/age-gated tags)
  */
-async function smartSearch(player, query, isUrl, user) {
+export async function smartSearch(player, query, isUrl, user) {
     if (isUrl) {
         // Check if the URL was previously marked as restricted / login-required
         for (const id of restrictedTrackIds) {
@@ -385,6 +385,10 @@ export const playCommand = {
                 for (const t of res.tracks) {
                     t.requester = interaction.user;
                 }
+                // If the only song in queue is an autoplay prefetch, clear it before adding the user's playlist
+                if (player.queue.tracks.length === 1 && player.queue.tracks[0].requester?.displayName === "📻 Autoplay Radio") {
+                    player.queue.tracks.shift();
+                }
                 await player.queue.add(res.tracks);
                 if (!player.playing && !player.paused) {
                     await player.play();
@@ -415,7 +419,13 @@ export const playCommand = {
             const isAlreadyPlaying = player.queue.current?.info.identifier === track.info.identifier || player.queue.current?.info.uri === track.info.uri;
             const isDuplicateInQueue = player.queue.tracks.some((t) => t.info.identifier === track.info.identifier || t.info.uri === track.info.uri);
             track.requester = interaction.user;
-            await player.queue.add(track);
+            // If the queue only contains a pre-fetched autoplay track, place user's song ahead of it
+            if (player.queue.tracks.length === 1 && player.queue.tracks[0].requester?.displayName === "📻 Autoplay Radio") {
+                await player.queue.add(track, 0);
+            }
+            else {
+                await player.queue.add(track);
+            }
             console.log(`[Play Command] Queued track: "${track.info.title}" (${track.info.uri}) by "${track.info.author}" | Queue size: ${player.queue.tracks.length}`);
             if (!player.playing && !player.paused) {
                 await player.play();

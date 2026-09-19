@@ -26,6 +26,25 @@ export function handleVoiceStateUpdate(oldState, newState, client) {
         player.destroy("Bot disconnected from voice").catch(() => { });
         return;
     }
+    // 1.5 Bot was server muted or unmuted
+    if (newState.member?.id === client.user?.id && oldState.serverMute !== newState.serverMute) {
+        if (newState.serverMute && !player.paused) {
+            console.log(`[VoiceState] Bot was server muted in "${guild.name}". Auto-pausing.`);
+            player.pause();
+            if (player.textChannelId) {
+                const textChannel = guild.channels.cache.get(player.textChannelId);
+                textChannel?.send("I paused the music because I am server muted.").catch(() => { });
+            }
+        }
+        else if (!newState.serverMute && player.paused) {
+            console.log(`[VoiceState] Bot was server unmuted in "${guild.name}". Auto-resuming.`);
+            player.resume();
+            if (player.textChannelId) {
+                const textChannel = guild.channels.cache.get(player.textChannelId);
+                textChannel?.send("I resumed the music because someone unmuted me.").catch(() => { });
+            }
+        }
+    }
     // 2. Check if the voice channel where the bot is connected is now empty
     if (!player.voiceChannelId)
         return;

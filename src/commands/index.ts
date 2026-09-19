@@ -27,6 +27,7 @@ import { autoplayCommand } from "./autoplay.js";
 import { skiptoCommand } from "./skipto.js";
 import { moveCommand } from "./move.js";
 import { normalizeCommand } from "./normalize.js";
+import { playlistCommand } from "./playlist.js";
 
 export const commands = [
   playCommand,
@@ -52,6 +53,7 @@ export const commands = [
   helpCommand,
   cleanCommand,
   favoritesCommand,
+  playlistCommand,
   autoplayCommand,
   pingCommand, // Hidden from /help command as requested
   // prefixCommand, // Hidden for now (requires Privileged Message Content Intent)

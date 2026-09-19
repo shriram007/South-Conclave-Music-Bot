@@ -36,7 +36,7 @@ async function resolveSpotifyTrack(url: string): Promise<string | null> {
   return null;
 }
 
-async function resolveTrackQuery(rawQuery: string): Promise<{ query: string; isUrl: boolean }> {
+export async function resolveTrackQuery(rawQuery: string): Promise<{ query: string; isUrl: boolean }> {
   let trimmed = rawQuery.trim();
 
   // If it's a YouTube watch URL with an auto-generated mix (&list=RD... or &list=UL...), strip the mix list param so it only plays the selected track
@@ -74,7 +74,7 @@ async function resolveTrackQuery(rawQuery: string): Promise<{ query: string; isU
  * 3. Tries SoundCloud (purity, no YouTube login wall)
  * 4. Tries clean YouTube audio streams (filtering out video/age-gated tags)
  */
-async function smartSearch(
+export async function smartSearch(
   player: any,
   query: string,
   isUrl: boolean,
@@ -436,6 +436,12 @@ export const playCommand = {
         for (const t of res.tracks) {
           t.requester = interaction.user;
         }
+
+        // If the only song in queue is an autoplay prefetch, clear it before adding the user's playlist
+        if (player.queue.tracks.length === 1 && (player.queue.tracks[0].requester as any)?.displayName === "📻 Autoplay Radio") {
+          player.queue.tracks.shift();
+        }
+
         await player.queue.add(res.tracks);
         if (!player.playing && !player.paused) {
           await player.play();
@@ -473,7 +479,13 @@ export const playCommand = {
       );
 
       track.requester = interaction.user;
-      await player.queue.add(track);
+
+      // If the queue only contains a pre-fetched autoplay track, place user's song ahead of it
+      if (player.queue.tracks.length === 1 && (player.queue.tracks[0].requester as any)?.displayName === "📻 Autoplay Radio") {
+        await player.queue.add(track, 0);
+      } else {
+        await player.queue.add(track);
+      }
 
       console.log(`[Play Command] Queued track: "${track.info.title}" (${track.info.uri}) by "${track.info.author}" | Queue size: ${player.queue.tracks.length}`);
 

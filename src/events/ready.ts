@@ -5,16 +5,18 @@ import { lavalink } from "../lavalink/client.js";
 import { loadPrefixes } from "../utils/prefixes.js";
 import { load247, rejoin247Channels } from "../utils/twentyFourSeven.js";
 import { loadFavorites } from "../utils/favorites.js";
+import { loadPlaylists } from "../utils/playlists.js";
 import { restoreSessions, startSessionAutoSave } from "../utils/sessionRecovery.js";
 
 export async function onReady(client: Client) {
   if (!client.user) return;
   console.log(`[Bot] Logged in as ${client.user.tag} (ID: ${client.user.id})`);
 
-  // Load server prefixes, 24/7 configurations, and personal favorites
+  // Load server prefixes, 24/7 configurations, personal favorites, and custom playlists
   loadPrefixes();
   load247();
   loadFavorites();
+  loadPlaylists();
 
   // Set rich bot activity
   client.user.setPresence({
