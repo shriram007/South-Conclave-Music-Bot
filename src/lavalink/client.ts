@@ -171,8 +171,10 @@ export async function findAutoplayRecommendation(player: Player, seedTrack: Trac
 
   let foundCandidate: Track | null = null;
 
-  // Strategy 0: High-fidelity JioSaavn Regional Radio for Indian languages
-  if (["tamil", "telugu", "malayalam", "hindi"].includes(seedLang)) {
+  const isJioSeed = Boolean((seedTrack.userData as any)?.isJioSaavn) || seedTrack.info.sourceName === "jiosaavn";
+
+  // Strategy 0: If current playing track came from JioSaavn (/jio), keep streaming pristine 320k JioSaavn Studio Radio!
+  if (isJioSeed && ["tamil", "telugu", "malayalam", "hindi", "punjabi"].includes(seedLang)) {
     try {
       const jioAuto = await findJioSaavnAutoplay(cleanTitle, rawAuthor, seedLang, historyIds);
       if (jioAuto) {
@@ -185,7 +187,7 @@ export async function findAutoplayRecommendation(player: Player, seedTrack: Trac
         if (converted) {
           console.log(`[Smart Autoplay] Found regional JioSaavn recommendation (${seedLang}): "${converted.track.info.title}" by "${converted.track.info.author}"`);
           converted.track.requester = { displayName: "📻 Autoplay Radio" } as any;
-          converted.track.userData = { ...(converted.track.userData || {}), command: "Autoplay", isAutoplay: true };
+          (converted.track as any).userData = { ...(converted.track.userData || {}), command: "Autoplay", isAutoplay: true };
           return converted.track;
         }
       }

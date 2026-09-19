@@ -150,8 +150,9 @@ export async function findAutoplayRecommendation(player, seedTrack) {
             historyIds.add(t.info.identifier);
     }
     let foundCandidate = null;
-    // Strategy 0: High-fidelity JioSaavn Regional Radio for Indian languages
-    if (["tamil", "telugu", "malayalam", "hindi"].includes(seedLang)) {
+    const isJioSeed = Boolean(seedTrack.userData?.isJioSaavn) || seedTrack.info.sourceName === "jiosaavn";
+    // Strategy 0: If current playing track came from JioSaavn (/jio), keep streaming pristine 320k JioSaavn Studio Radio!
+    if (isJioSeed && ["tamil", "telugu", "malayalam", "hindi", "punjabi"].includes(seedLang)) {
         try {
             const jioAuto = await findJioSaavnAutoplay(cleanTitle, rawAuthor, seedLang, historyIds);
             if (jioAuto) {
