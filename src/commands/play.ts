@@ -4,7 +4,7 @@ import {
   EmbedBuilder,
   SlashCommandBuilder,
 } from "discord.js";
-import { getBestNode, getOrCreatePlayer, isNodeHealthy, lavalink, markNodeDegraded, restrictedTrackIds, updateActivePlayerMessage } from "../lavalink/client.js";
+import { getBestNode, getOrCreatePlayer, isNodeHealthy, lavalink, markNodeDegraded, purgeAutoplayTracks, restrictedTrackIds, updateActivePlayerMessage } from "../lavalink/client.js";
 import { autoDeleteReply } from "../utils/cleanup.js";
 import { getFavorites } from "../utils/favorites.js";
 import { formatDuration, getSourceInfo, getTrackRelevanceScore, isRelevantTrack } from "../utils/formatters.js";
@@ -301,6 +301,9 @@ export const playCommand = {
       const playlistName = rawQuery.replace(/^playlist:/i, "").trim();
       const customPlaylist = getPlaylist(interaction.user.id, playlistName);
       if (customPlaylist && customPlaylist.tracks.length > 0) {
+        // Purge any pre-fetched autoplay tracks so user's playlist takes 100% priority
+        purgeAutoplayTracks(player);
+
         let queuedCount = 0;
         let firstTrackStarted = false;
         const BATCH_SIZE = 5;
@@ -407,10 +410,8 @@ export const playCommand = {
           t.requester = interaction.user;
         }
 
-        // If the only song in queue is an autoplay prefetch, clear it before adding the user's playlist
-        if (player.queue.tracks.length === 1 && (player.queue.tracks[0].requester as any)?.displayName === "📻 Autoplay Radio") {
-          player.queue.tracks.shift();
-        }
+        // Purge any pre-fetched autoplay tracks so user's playlist takes 100% priority
+        purgeAutoplayTracks(player);
 
         await player.queue.add(res.tracks);
         if (!player.playing && !player.paused) {
@@ -450,12 +451,10 @@ export const playCommand = {
 
       track.requester = interaction.user;
 
-      // If the queue only contains a pre-fetched autoplay track, place user's song ahead of it
-      if (player.queue.tracks.length === 1 && (player.queue.tracks[0].requester as any)?.displayName === "📻 Autoplay Radio") {
-        await player.queue.add(track, 0);
-      } else {
-        await player.queue.add(track);
-      }
+      // Purge any pre-fetched autoplay tracks so user's track takes 100% priority
+      purgeAutoplayTracks(player);
+
+      await player.queue.add(track);
 
       console.log(`[Play Command] Queued track: "${track.info.title}" (${track.info.uri}) by "${track.info.author}" | Queue size: ${player.queue.tracks.length}`);
 

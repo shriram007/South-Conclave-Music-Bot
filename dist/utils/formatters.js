@@ -236,3 +236,108 @@ export function getTrackRelevanceScore(candidateTitle, targetTitle) {
 export function isRelevantTrack(candidateTitle, targetTitle, minSimilarity = 0.65) {
     return getTrackRelevanceScore(candidateTitle, targetTitle) >= minSimilarity;
 }
+/**
+ * Detects the musical language / cultural context of a track using scripts, keywords, artist names, and record labels.
+ */
+export function detectTrackLanguage(title, author = "") {
+    const text = `${title} ${author}`.toLowerCase();
+    // 1. Unicode Script blocks (100% conclusive)
+    if (/[\u0B80-\u0BFF]/.test(text))
+        return "tamil";
+    if (/[\u0C00-\u0C7F]/.test(text))
+        return "telugu";
+    if (/[\u0D00-\u0D7F]/.test(text))
+        return "malayalam";
+    if (/[\u0C80-\u0CFF]/.test(text))
+        return "kannada";
+    if (/[\u0900-\u097F]/.test(text))
+        return "hindi";
+    if (/[\u0A00-\u0A7F]/.test(text))
+        return "punjabi";
+    if (/[\uAC00-\uD7AF]/.test(text))
+        return "korean";
+    if (/[\u3040-\u30ff]/.test(text))
+        return "japanese";
+    // 2. Explicit Language tags in titles
+    if (/\b(tamil|thamizh|thamizhan)\b/i.test(text))
+        return "tamil";
+    if (/\b(telugu)\b/i.test(text))
+        return "telugu";
+    if (/\b(malayalam)\b/i.test(text))
+        return "malayalam";
+    if (/\b(kannada)\b/i.test(text))
+        return "kannada";
+    if (/\b(hindi|bollywood)\b/i.test(text))
+        return "hindi";
+    if (/\b(punjabi)\b/i.test(text))
+        return "punjabi";
+    // 3. Indian Label Channel checks
+    if (/\b(think music|sony music south|saregama tamil|lahari tamil|sun pictures|vijay music|trendmusic)\b/i.test(text))
+        return "tamil";
+    if (/\b(aditya music|lahari telugu|saregama telugu|mango music)\b/i.test(text))
+        return "telugu";
+    if (/\b(muzik247|saina music|millennium audios|satyam audios|manorama music)\b/i.test(text))
+        return "malayalam";
+    if (/\b(anand audio|jhankar music|aakash audio)\b/i.test(text))
+        return "kannada";
+    if (/\b(t-series|zeemusic|yrf|tips official|eros now|venus)\b/i.test(text))
+        return "hindi";
+    if (/\b(speed records|white hill music|single track studios)\b/i.test(text))
+        return "punjabi";
+    // 4. Prominent Artists, Composers, and Movie Keywords
+    // Tamil
+    if (/\b(anirudh|yuvan|ilayaraja|ilayaraaja|harris jayaraj|santhosh narayanan|sa-na|dhanush|vijay sethupathi|trisha|govind vasantha|sid sriram|u1|spb|karthik|chinmayi|naresh iyer|gv prakash|g\.v\. prakash|d imman|vijay|ajith|suriya|rajinikanth|kamal haasan|vignesh shivan|sean roldan|pradeep kumar|dhee|haricharan|shweta mohan|vijay antony|deva|vidyasagar|stephen zechariah|keba jeremiah|kaadhal|kadhal|kadhale|kaathalae|kanne|kannamma|vaathi|mersal|leo|jailer|master|vikram|kaaviyathalaivan|aarambam|asuran|karnan|raayan|goat|anbe shivam|kandukondain|jeans|alaipayuthey|vinnaithaandi|mudhalvan|sivaji)\b/i.test(text)) {
+        return "tamil";
+    }
+    // Telugu
+    if (/\b(devi sri prasad|dsp|thaman|keeravani|m\.m\. keeravani|chiranjeevi|mahesh babu|allu arjun|prabhas|ntr|ram charan|anurag kulkarni|ramajogayya|nani|devara|pushpa|kalki|gopi sundar|mickey j meyer|hemanth|geetha madhuri|samajavaragamana|ala vaikunthapurramuloo|butta bomma|oo antava)\b/i.test(text)) {
+        return "telugu";
+    }
+    // Malayalam
+    if (/\b(sushin shyam|rex vijayan|shaan rahman|bijibal|mohanlal|mammootty|dulquer|fahadh|prithviraj|vineeth sreenivasan|ks chithra|chithra|jassie gift|job kurian|manjari|mg sreekumar|avesham|premalu|manjummel|hridayam|kumbalangi)\b/i.test(text)) {
+        return "malayalam";
+    }
+    // Hindi
+    if (/\b(arijit|pritam|atif aslam|neha kakkar|vishal-shekhar|shreya ghoshal|sonu nigam|jubin nautiyal|badshah|honey singh|armaan malik|darshan raval|amit trivedi|sachin-jigar|alka yagnik|udit narayan|kumar sanu|sunidhi chauhan|mohit chauhan|kk|rahat fateh|shankar-ehsaan-loy|khwaja|jodhaa|sufi|ghazal|qawwali|karan johar|shah rukh|salman|aamir|ranbir|ranveer|kesariya|channa mereya|tum hi ho|rang de basanti|luka chuppi)\b/i.test(text)) {
+        return "hindi";
+    }
+    // Punjabi
+    if (/\b(moosewala|sidhu|ap dhillon|diljit|karan aujla|shubh|gurdas|b praak|jassi|ammy virk|hardy sandhu|guru randhawa|sukhe|mankirt)\b/i.test(text)) {
+        return "punjabi";
+    }
+    // Korean
+    if (/\b(k-pop|kpop|bts|blackpink|stray kids|twice|newjeans|exo|iu|aespa|seventeen|red velvet|enhypen|tomorrow x together)\b/i.test(text)) {
+        return "korean";
+    }
+    // Japanese
+    if (/\b(anime|j-pop|jpop|yoasobi|kenshi yonezu|lisa|ado|eve|radwimps|aimer|official hige dandism|fujii kaze)\b/i.test(text)) {
+        return "japanese";
+    }
+    // English / Western
+    if (/\b(the weeknd|ed sheeran|taylor swift|drake|post malone|coldplay|billie eilish|dua lipa|eminem|bruno mars|ariana grande|travis scott|kendrick|justin bieber|imagine dragons|rihanna|maroon 5|charlie puth|adele|shawn mendes|olivia rodrigo)\b/i.test(text)) {
+        return "english";
+    }
+    return "global";
+}
+/**
+ * Checks if candidate track language is culturally and linguistically compatible with the seed track.
+ * Strictly prevents cross-language jarring transitions (e.g. Tamil -> Hindi or Western -> Bollywood).
+ */
+export function isLanguageCompatible(seedLang, candidateLang) {
+    if (seedLang === "global" || candidateLang === "global")
+        return true;
+    if (seedLang === candidateLang)
+        return true;
+    const isSouthIndian = (l) => l === "tamil" || l === "telugu" || l === "malayalam" || l === "kannada";
+    const isNorthIndian = (l) => l === "hindi" || l === "punjabi";
+    // Strict boundary: South Indian vs North Indian vs Western
+    if (isSouthIndian(seedLang) && isNorthIndian(candidateLang))
+        return false;
+    if (isNorthIndian(seedLang) && isSouthIndian(candidateLang))
+        return false;
+    if (seedLang === "english" && (isSouthIndian(candidateLang) || isNorthIndian(candidateLang)))
+        return false;
+    if ((isSouthIndian(seedLang) || isNorthIndian(seedLang)) && candidateLang === "english")
+        return false;
+    return false;
+}

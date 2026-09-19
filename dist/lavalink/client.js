@@ -3,7 +3,7 @@ import { LavalinkManager } from "lavalink-client";
 import { config } from "../config.js";
 import { buildPlayerMessage } from "./playerUI.js";
 import { autoDeleteMessage } from "../utils/cleanup.js";
-import { getChannelBitrateInfo, isRelevantTrack } from "../utils/formatters.js";
+import { detectTrackLanguage, getChannelBitrateInfo, isLanguageCompatible, isRelevantTrack } from "../utils/formatters.js";
 import { is247Enabled } from "../utils/twentyFourSeven.js";
 import { clearGuildSession, saveActiveSessions } from "../utils/sessionRecovery.js";
 import { applyLoudnessNormalization } from "../commands/normalize.js";
@@ -125,7 +125,8 @@ export async function findAutoplayRecommendation(player, seedTrack) {
     const rawAuthor = (seedTrack.info.author || "").replace(/- Topic/gi, "").trim();
     const cleanTitle = rawTitle.replace(/\|.*/, "").replace(/\[.*?\]/g, "").replace(/\(.*?\)/g, "").trim();
     const videoId = seedTrack.info.identifier;
-    console.log(`[Smart Autoplay] Finding AI radio recommendations based on "${cleanTitle}" by "${rawAuthor}"...`);
+    const seedLang = detectTrackLanguage(rawTitle, rawAuthor);
+    console.log(`[Smart Autoplay] Finding AI radio recommendations based on "${cleanTitle}" by "${rawAuthor}" (Language: ${seedLang.toUpperCase()})...`);
     const connectedNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected);
     const healthyNodes = connectedNodes.filter((n) => isNodeHealthy(n.id));
     const milloNode = healthyNodes.find((n) => n.id === "Millo-BackupNode");
@@ -160,26 +161,30 @@ export async function findAutoplayRecommendation(player, seedTrack) {
                         !restrictedTrackIds.has(t.info.identifier) &&
                         !isSameSongOrJunk(t.info.title, [...player.queue.previous, ...(player.queue.current ? [player.queue.current] : [])]) &&
                         (t.info.duration || 0) >= 60000 &&
-                        (t.info.duration || 0) <= 900000);
+                        (t.info.duration || 0) <= 900000 &&
+                        isLanguageCompatible(seedLang, detectTrackLanguage(t.info.title, t.info.author || "")));
                     if (validCandidates.length > 0) {
+                        // Prioritize candidates with the EXACT same language (e.g. Tamil -> Tamil)
+                        const exactLangCandidates = validCandidates.filter((t) => detectTrackLanguage(t.info.title, t.info.author || "") === seedLang);
+                        const candidatePool = exactLangCandidates.length > 0 ? exactLangCandidates : validCandidates;
                         const cleanCurrentAuthor = rawAuthor.toLowerCase();
-                        const otherArtistCandidates = validCandidates.filter((t) => {
+                        const otherArtistCandidates = candidatePool.filter((t) => {
                             const tAuthor = (t.info?.author || "").toLowerCase();
                             return !tAuthor.includes(cleanCurrentAuthor) && !cleanCurrentAuthor.includes(tAuthor);
                         });
-                        const sameArtistCandidates = validCandidates.filter((t) => {
+                        const sameArtistCandidates = candidatePool.filter((t) => {
                             const tAuthor = (t.info?.author || "").toLowerCase();
                             return tAuthor.includes(cleanCurrentAuthor) || cleanCurrentAuthor.includes(tAuthor);
                         });
-                        // Vibe selection policy: 80% other artists in same genre/vibe, 20% same artist
+                        // Vibe selection policy: 80% other artists in same language/vibe, 20% same artist
                         let candidate;
                         if (otherArtistCandidates.length > 0 && Math.random() < 0.80) {
                             candidate = otherArtistCandidates[Math.floor(Math.random() * Math.min(4, otherArtistCandidates.length))];
                             if (candidate)
-                                console.log(`[Smart Autoplay] Vibe match from related artist: "${candidate.info.author}" to balance "${rawAuthor}"`);
+                                console.log(`[Smart Autoplay] Language match (${seedLang}): "${candidate.info.title}" by "${candidate.info.author}"`);
                         }
                         else {
-                            candidate = sameArtistCandidates[0] || otherArtistCandidates[0] || validCandidates[0];
+                            candidate = sameArtistCandidates[0] || otherArtistCandidates[0] || candidatePool[0];
                         }
                         if (candidate) {
                             foundCandidate = candidate;
@@ -198,12 +203,13 @@ export async function findAutoplayRecommendation(player, seedTrack) {
     }
     // Strategy 2: Curated artist hits & similar song search across nodes if RD playlist did not match
     if (!foundCandidate) {
-        const queriesToTry = [
-            `${cleanTitle} similar songs`,
-            `${rawAuthor} similar artists`,
-            `${cleanTitle} mix`,
-            `${rawAuthor} top tracks`,
-        ];
+        const queriesToTry = [];
+        if (seedLang !== "global" && seedLang !== "english") {
+            queriesToTry.push(`${cleanTitle} ${seedLang} songs`, `${rawAuthor} ${seedLang} hit songs`, `${cleanTitle} similar ${seedLang} songs`, `${rawAuthor} ${seedLang} radio`);
+        }
+        else {
+            queriesToTry.push(`${cleanTitle} similar songs`, `${rawAuthor} similar artists`, `${cleanTitle} mix`, `${rawAuthor} top tracks`);
+        }
         for (const query of queriesToTry) {
             if (foundCandidate)
                 break;
@@ -217,7 +223,8 @@ export async function findAutoplayRecommendation(player, seedTrack) {
                             !restrictedTrackIds.has(t.info.identifier) &&
                             !isSameSongOrJunk(t.info.title, [...player.queue.previous, ...(player.queue.current ? [player.queue.current] : [])]) &&
                             (t.info.duration || 0) >= 60000 &&
-                            (t.info.duration || 0) <= 900000);
+                            (t.info.duration || 0) <= 900000 &&
+                            isLanguageCompatible(seedLang, detectTrackLanguage(t.info.title, t.info.author || "")));
                         if (candidate) {
                             foundCandidate = candidate;
                             break;
@@ -270,6 +277,13 @@ export async function prefetchAutoplayTrack(player) {
     const isAutoplay = Boolean(player.getData("autoplay") ?? true);
     if (!isAutoplay)
         return;
+    // STRICT USER PRIORITY: If there are ANY user-queued tracks, do not prefetch autoplay!
+    const userTracks = player.queue.tracks.filter((t) => {
+        const isAuto = t.requester?.displayName === "📻 Autoplay Radio" || t.requester?.username === "Autoplay Radio" || t.userData?.isAutoplay;
+        return !isAuto;
+    });
+    if (userTracks.length > 0)
+        return;
     if (player.queue.tracks.length > 0)
         return;
     if (player.getData("prefetching_autoplay"))
@@ -280,7 +294,11 @@ export async function prefetchAutoplayTrack(player) {
     player.setData("prefetching_autoplay", true);
     try {
         const track = await findAutoplayRecommendation(player, seed);
-        if (track && player.queue.tracks.length === 0) {
+        const currentUserTracks = player.queue.tracks.filter((t) => {
+            const isAuto = t.requester?.displayName === "📻 Autoplay Radio" || t.requester?.username === "Autoplay Radio" || t.userData?.isAutoplay;
+            return !isAuto;
+        });
+        if (track && currentUserTracks.length === 0 && player.queue.tracks.length === 0) {
             await player.queue.add(track);
             console.log(`[Smart Autoplay] Pre-fetched "${track.info.title}" by "${track.info.author}" for zero-buffer gapless transition.`);
         }
@@ -290,6 +308,18 @@ export async function prefetchAutoplayTrack(player) {
     }
     finally {
         player.setData("prefetching_autoplay", false);
+    }
+}
+/**
+ * Removes any pre-fetched autoplay tracks in-place from the queue so user-queued tracks take 100% priority
+ */
+export function purgeAutoplayTracks(player) {
+    for (let i = player.queue.tracks.length - 1; i >= 0; i--) {
+        const t = player.queue.tracks[i];
+        const isAuto = t.requester?.displayName === "📻 Autoplay Radio" || t.requester?.username === "Autoplay Radio" || t.userData?.isAutoplay;
+        if (isAuto) {
+            player.queue.tracks.splice(i, 1);
+        }
     }
 }
 export function getMasterNodeConfigs() {
@@ -558,10 +588,14 @@ export function initLavalink(client) {
                     }
                 }
             }
-            // Pre-fetch next autoplay recommendation in background for zero-buffer gapless transition
+            // Pre-fetch next autoplay recommendation in background only when queue has NO user tracks
             setTimeout(() => {
                 const isAutoplay = Boolean(player.getData("autoplay") ?? true);
-                if (isAutoplay && player.queue.tracks.length === 0) {
+                const userTracks = player.queue.tracks.filter((t) => {
+                    const isAuto = t.requester?.displayName === "📻 Autoplay Radio" || t.requester?.username === "Autoplay Radio" || t.userData?.isAutoplay;
+                    return !isAuto;
+                });
+                if (isAutoplay && userTracks.length === 0 && player.queue.tracks.length === 0) {
                     prefetchAutoplayTrack(player).catch(() => { });
                 }
             }, 2500);

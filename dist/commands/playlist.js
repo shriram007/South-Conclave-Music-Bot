@@ -1,5 +1,5 @@
 import { EmbedBuilder, SlashCommandBuilder, } from "discord.js";
-import { getOrCreatePlayer, lavalink, updateActivePlayerMessage } from "../lavalink/client.js";
+import { getOrCreatePlayer, lavalink, purgeAutoplayTracks, updateActivePlayerMessage } from "../lavalink/client.js";
 import { autoDeleteReply } from "../utils/cleanup.js";
 import { formatDuration } from "../utils/formatters.js";
 import { addQueueToPlaylist, addSongToPlaylist, createPlaylist, deletePlaylist, getPlaylist, getUserPlaylists, } from "../utils/playlists.js";
@@ -285,6 +285,8 @@ export const playlistCommand = {
             await interaction.editReply(`🔍 Loading **${playlist.tracks.length}** songs from **${playlist.name}**...`);
             let queuedCount = 0;
             let firstTrackStarted = false;
+            // Purge any existing autoplay prefetch so user's playlist takes 100% priority
+            purgeAutoplayTracks(player);
             // Fast concurrent batch resolver (batches of 5)
             const BATCH_SIZE = 5;
             for (let i = 0; i < playlist.tracks.length; i += BATCH_SIZE) {
