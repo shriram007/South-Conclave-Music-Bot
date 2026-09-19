@@ -164,6 +164,7 @@ export async function findAutoplayRecommendation(player, seedTrack) {
                 if (converted) {
                     console.log(`[Smart Autoplay] Found regional JioSaavn recommendation (${seedLang}): "${converted.track.info.title}" by "${converted.track.info.author}"`);
                     converted.track.requester = { displayName: "📻 Autoplay Radio" };
+                    converted.track.userData = { ...(converted.track.userData || {}), command: "Autoplay", isAutoplay: true };
                     return converted.track;
                 }
             }
@@ -308,6 +309,7 @@ export async function findAutoplayRecommendation(player, seedTrack) {
     // Do NOT force-migrate the player to a different node here — the player's current
     // healthy node is already streaming fine. Migration only happens in trackError recovery.
     studioMasterTrack.requester = { displayName: "📻 Autoplay Radio" };
+    studioMasterTrack.userData = { ...(studioMasterTrack.userData || {}), command: "Autoplay", isAutoplay: true };
     return studioMasterTrack;
 }
 /**

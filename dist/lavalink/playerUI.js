@@ -13,7 +13,7 @@ export function buildPlayerMessage(player, track) {
             .setDescription("🎵 No song currently playing.");
         return { embeds: [emptyEmbed], components: [] };
     }
-    const source = getSourceInfo(current.info.sourceName, current.info.uri);
+    const source = getSourceInfo(current.info.sourceName, current.info.uri, current.userData);
     const position = player.position || 0;
     const duration = current.info.duration || 0;
     const isPaused = player.paused;

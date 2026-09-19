@@ -11,7 +11,8 @@ async function executeJioSaavn(interaction) {
         return;
     }
     const rawQuery = interaction.options.getString("query", true).trim();
-    console.log(`[JioSaavn Command] User: "${interaction.user.tag}" (${interaction.user.id}) in "${interaction.guild?.name}" | Query: "${rawQuery}"`);
+    const cmdName = interaction.commandName === "jiosaavn" ? "/jiosaavn" : "/jio";
+    console.log(`[JioSaavn Command] User: "${interaction.user.tag}" (${interaction.user.id}) in "${interaction.guild?.name}" | Command: "${cmdName}" | Query: "${rawQuery}"`);
     const candidateNodes = [
         ...(player.node?.connected ? [player.node] : []),
         ...Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected && n.id !== player.node?.id),
@@ -27,6 +28,7 @@ async function executeJioSaavn(interaction) {
                         await player.changeNode(converted.node, false).catch(() => { });
                     }
                     const track = converted.track;
+                    track.userData = { ...(track.userData || {}), command: cmdName, isJioSaavn: true };
                     purgeAutoplayTracks(player);
                     await player.queue.add(track);
                     if (!player.playing && !player.paused) {
@@ -36,7 +38,7 @@ async function executeJioSaavn(interaction) {
                     }
                     else {
                         await updateActivePlayerMessage(player);
-                        const source = getSourceInfo(track.info.sourceName, track.info.uri);
+                        const source = getSourceInfo(track.info.sourceName, track.info.uri, track.userData);
                         const position = player.queue.tracks.length;
                         const embed = new EmbedBuilder()
                             .setColor(source.color)
@@ -69,6 +71,7 @@ async function executeJioSaavn(interaction) {
                             if (!firstTrackStarted && player.node && player.node.id !== conv.node.id && !player.playing) {
                                 await player.changeNode(conv.node, false).catch(() => { });
                             }
+                            conv.track.userData = { ...(conv.track.userData || {}), command: cmdName, isJioSaavn: true };
                             await player.queue.add(conv.track);
                             queuedCount++;
                             if (!firstTrackStarted && !player.playing && !player.paused) {
@@ -83,7 +86,7 @@ async function executeJioSaavn(interaction) {
                         await player.play();
                     else
                         await updateActivePlayerMessage(player);
-                    const source = getSourceInfo("jiosaavn", rawQuery);
+                    const source = getSourceInfo("jiosaavn", rawQuery, { command: cmdName, isJioSaavn: true });
                     const embed = new EmbedBuilder()
                         .setColor(source.color)
                         .setTitle("🎶 JioSaavn Collection Queued")
@@ -118,6 +121,7 @@ async function executeJioSaavn(interaction) {
                 await player.changeNode(converted.node, false).catch(() => { });
             }
             const track = converted.track;
+            track.userData = { ...(track.userData || {}), command: cmdName, isJioSaavn: true };
             purgeAutoplayTracks(player);
             await player.queue.add(track);
             if (!player.playing && !player.paused) {
@@ -127,7 +131,7 @@ async function executeJioSaavn(interaction) {
             }
             else {
                 await updateActivePlayerMessage(player);
-                const source = getSourceInfo(track.info.sourceName, track.info.uri);
+                const source = getSourceInfo(track.info.sourceName, track.info.uri, track.userData);
                 const position = player.queue.tracks.length;
                 const embed = new EmbedBuilder()
                     .setColor(source.color)

@@ -1,5 +1,5 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, } from "discord.js";
-import { formatDuration } from "../utils/formatters.js";
+import { formatDuration, getSourceInfo } from "../utils/formatters.js";
 /**
  * Builds the interactive queue management message matching FlaviBot layout.
  * Allows users to inspect tracks, select any song in the queue, and perform actions:
@@ -28,7 +28,9 @@ export function buildQueueMessage(player, page = 0, selectedIndex = 0, initiator
         : "Queue is empty");
     let desc = "";
     if (current) {
-        desc += `**Now Playing:** [${current.info.title.substring(0, 50)}](${current.info.uri || "https://discord.com"}) • \`${formatDuration(current.info.duration || 0)}\`\n\n`;
+        const currSource = getSourceInfo(current.info.sourceName, current.info.uri, current.userData);
+        const currTag = currSource.name.includes("JioSaavn") ? "💎 JioSaavn" : (current.info.sourceName === "spotify" ? "🟢 Spotify" : "🎧 YT Music");
+        desc += `**Now Playing:** [${current.info.title.substring(0, 48)}](${current.info.uri || "https://discord.com"}) • \`${formatDuration(current.info.duration || 0)}\` • ${currTag} (\`${currSource.command}\`)\n\n`;
     }
     if (pageTracks.length === 0) {
         const isAutoplay = Boolean(player.getData("autoplay") ?? true);
@@ -42,21 +44,24 @@ export function buildQueueMessage(player, page = 0, selectedIndex = 0, initiator
             desc += "📻 **Autoplay Radio Active:** The queue is clear, but similar songs will stream automatically!\n💡 *Add songs anytime using `/play <song>`.*";
         }
         else {
-            desc += "ℹ️ Queue is currently empty. Use `/play` to add tracks!";
+            desc += "ℹ️ Queue is currently empty. Use `/play` or `/jio` to add tracks!";
         }
     }
     else {
         pageTracks.forEach((t, i) => {
             const num = startIdx + i + 1;
             const isTarget = i === safeSelected;
-            const title = t.info.title.substring(0, 48);
-            const author = (t.info.author || "Unknown Artist").substring(0, 35);
+            const title = t.info.title.substring(0, 45);
+            const author = (t.info.author || "Unknown Artist").substring(0, 30);
             const dur = formatDuration(t.info.duration || 0);
+            const tSource = getSourceInfo(t.info.sourceName, t.info.uri, t.userData);
+            const sourceTag = tSource.name.includes("JioSaavn") ? "💎 JioSaavn" : (t.info.sourceName === "spotify" ? "🟢 Spotify" : "🎧 YT Music");
+            const cmdTag = `\`${tSource.command}\``;
             if (isTarget) {
-                desc += `**${num}. [${title}](${t.info.uri || ""})** - \`${dur}\`\n*${author}*  🔘 **[Selected]**\n\n`;
+                desc += `**${num}. [${title}](${t.info.uri || ""})** - \`${dur}\`\n*${author}* • ${sourceTag} (${cmdTag})  🔘 **[Selected]**\n\n`;
             }
             else {
-                desc += `**${num}.** [${title}](${t.info.uri || ""}) - \`${dur}\`\n*${author}*\n\n`;
+                desc += `**${num}.** [${title}](${t.info.uri || ""}) - \`${dur}\`\n*${author}* • ${sourceTag} (${cmdTag})\n\n`;
             }
         });
     }

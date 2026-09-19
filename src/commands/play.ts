@@ -239,26 +239,7 @@ export async function smartSearch(
     }
   };
 
-  // 1. Try JioSaavn 320 kbps Studio Master first (unrestricted, authentic 320 kbps AAC, typo-tolerant)
-  try {
-    const jioTrack = await resolveJioSaavnTrack(query);
-    if (jioTrack) {
-      const candidateNodes = [
-        ...(player.node?.connected ? [player.node] : []),
-        ...Array.from(lavalink.nodeManager.nodes.values()).filter((n: any) => n.connected && n.id !== player.node?.id),
-      ];
-      const converted = await loadJioSaavnAsLavalinkTrack(jioTrack, user, candidateNodes);
-      if (converted) {
-        syncPlayerNode(converted.node);
-        console.log(`[SmartSearch] Resolved "${converted.track.info.title}" via JioSaavn 320kbps Studio Master on node "${converted.node.id}"`);
-        return { loadType: "track", tracks: [converted.track] };
-      }
-    }
-  } catch (e: any) {
-    console.warn("[SmartSearch] JioSaavn resolution notice:", e?.message || e);
-  }
-
-  // 2. Try YouTube Music (ytmsearch) across connected healthy nodes
+  // 1. Try YouTube Music (ytmsearch) across connected healthy nodes
   for (const node of nodesToTry) {
     try {
       const res: any = await executeSearchWithTimeout(node, { query, source: "ytmsearch" });
@@ -279,7 +260,7 @@ export async function smartSearch(
     }
   }
 
-  // 3. Try YouTube search appending "audio" (favors authentic studio tracks over age-gated music videos)
+  // 2. Try YouTube search appending "audio" (favors authentic studio tracks over age-gated music videos)
   for (const node of nodesToTry) {
     try {
       const res: any = await executeSearchWithTimeout(node, { query: `${query} audio`, source: "ytsearch" });
@@ -300,7 +281,7 @@ export async function smartSearch(
     }
   }
 
-  // 4. Try SoundCloud search (scsearch) - ZERO YouTube login walls, fast & unrestricted, verified relevance
+  // 3. Try SoundCloud search (scsearch) - ZERO YouTube login walls, fast & unrestricted, verified relevance
   for (const node of nodesToTry) {
     try {
       const res: any = await executeSearchWithTimeout(node, { query, source: "scsearch" });
@@ -321,11 +302,34 @@ export async function smartSearch(
     }
   }
 
-  // 5. Return highest scoring candidate if it passes reasonable relevance threshold (>= 0.45)
+  // 4. Return highest scoring candidate if it passes reasonable relevance threshold (>= 0.45)
   if (bestCandidate && bestScore >= 0.45) {
     syncPlayerNode(bestCandidate.node);
     console.log(`[SmartSearch] Returning best fuzzy candidate "${bestCandidate.tracks[0].info.title}" (score: ${bestScore.toFixed(2)}) on node "${bestCandidate.node.id}"`);
     return { ...bestCandidate.res, tracks: bestCandidate.tracks };
+  }
+
+  // 5. Ultimate Fallback: Try JioSaavn 320 kbps Studio Master if global providers found no match
+  try {
+    const jioTrack = await resolveJioSaavnTrack(query);
+    if (jioTrack) {
+      const candidateNodes = [
+        ...(player.node?.connected ? [player.node] : []),
+        ...Array.from(lavalink.nodeManager.nodes.values()).filter((n: any) => n.connected && n.id !== player.node?.id),
+      ];
+      const converted = await loadJioSaavnAsLavalinkTrack(jioTrack, user, candidateNodes);
+      if (converted) {
+        syncPlayerNode(converted.node);
+        converted.track.userData = {
+          ...(converted.track.userData || {}),
+          command: "/play",
+        };
+        console.log(`[SmartSearch] Fallback resolved "${converted.track.info.title}" via JioSaavn 320kbps Studio Master on node "${converted.node.id}"`);
+        return { loadType: "track", tracks: [converted.track] };
+      }
+    }
+  } catch (e: any) {
+    console.warn("[SmartSearch] JioSaavn resolution notice:", e?.message || e);
   }
 
   return null;
@@ -402,6 +406,7 @@ export const playCommand = {
                 if (trackRes?.tracks?.length) {
                   const trk = trackRes.tracks[0];
                   trk.requester = interaction.user;
+                  trk.userData = { ...(trk.userData || {}), command: "/play" };
                   return trk;
                 }
               } catch {}
@@ -447,6 +452,7 @@ export const playCommand = {
               await player.changeNode(converted.node, false).catch(() => {});
             }
             const track = converted.track;
+            track.userData = { ...(track.userData || {}), command: "/play" };
             purgeAutoplayTracks(player);
             await player.queue.add(track);
             if (!player.playing && !player.paused) {
@@ -455,7 +461,7 @@ export const playCommand = {
               autoDeleteReply(interaction, 10000);
             } else {
               await updateActivePlayerMessage(player);
-              const source = getSourceInfo(track.info.sourceName, track.info.uri);
+              const source = getSourceInfo(track.info.sourceName, track.info.uri, track.userData);
               const position = player.queue.tracks.length;
               const embed = new EmbedBuilder()
                 .setColor(source.color)
@@ -490,6 +496,7 @@ export const playCommand = {
                 if (!firstTrackStarted && player.node && player.node.id !== conv.node.id && !player.playing) {
                   await player.changeNode(conv.node, false).catch(() => {});
                 }
+                conv.track.userData = { ...(conv.track.userData || {}), command: "/play" };
                 await player.queue.add(conv.track);
                 queuedCount++;
                 if (!firstTrackStarted && !player.playing && !player.paused) {
@@ -504,7 +511,7 @@ export const playCommand = {
             if (!firstTrackStarted && !player.playing && !player.paused) await player.play();
             else await updateActivePlayerMessage(player);
 
-            const source = getSourceInfo("jiosaavn", rawQuery);
+            const source = getSourceInfo("jiosaavn", rawQuery, { command: "/play" });
             const embed = new EmbedBuilder()
               .setColor(source.color)
               .setTitle("🎶 JioSaavn Collection Queued")
@@ -540,6 +547,7 @@ export const playCommand = {
             await player.changeNode(converted.node, false).catch(() => {});
           }
           const track = converted.track;
+          track.userData = { ...(track.userData || {}), command: "/play" };
           purgeAutoplayTracks(player);
           await player.queue.add(track);
           if (!player.playing && !player.paused) {
@@ -548,7 +556,7 @@ export const playCommand = {
             autoDeleteReply(interaction, 10000);
           } else {
             await updateActivePlayerMessage(player);
-            const source = getSourceInfo(track.info.sourceName, track.info.uri);
+            const source = getSourceInfo(track.info.sourceName, track.info.uri, track.userData);
             const position = player.queue.tracks.length;
             const embed = new EmbedBuilder()
               .setColor(source.color)
@@ -629,6 +637,7 @@ export const playCommand = {
       if (res.loadType === "playlist" && isActualPlaylist) {
         for (const t of res.tracks) {
           t.requester = interaction.user;
+          t.userData = { ...(t.userData || {}), command: "/play" };
         }
 
         // Purge any pre-fetched autoplay tracks so user's playlist takes 100% priority
@@ -642,7 +651,7 @@ export const playCommand = {
         }
 
         const playlistTitle = res.playlist?.name || res.playlist?.title || "Playlist";
-        const source = getSourceInfo(res.tracks[0]?.info.sourceName, res.tracks[0]?.info.uri);
+        const source = getSourceInfo(res.tracks[0]?.info.sourceName, res.tracks[0]?.info.uri, res.tracks[0]?.userData);
         const embed = new EmbedBuilder()
           .setColor(source.color)
           .setTitle("🎶 Playlist Queued")
@@ -671,6 +680,7 @@ export const playCommand = {
       );
 
       track.requester = interaction.user;
+      track.userData = { ...(track.userData || {}), command: "/play" };
 
       // Purge any pre-fetched autoplay tracks so user's track takes 100% priority
       purgeAutoplayTracks(player);
@@ -685,7 +695,7 @@ export const playCommand = {
         autoDeleteReply(interaction, 10000);
       } else {
         await updateActivePlayerMessage(player);
-        const source = getSourceInfo(track.info.sourceName, track.info.uri);
+        const source = getSourceInfo(track.info.sourceName, track.info.uri, track.userData);
         const position = player.queue.tracks.length;
         const embed = new EmbedBuilder()
           .setColor(source.color)

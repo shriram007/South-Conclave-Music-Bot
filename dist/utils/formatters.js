@@ -65,17 +65,19 @@ export function createFlaviProgressBar(currentMs, totalMs, barLength = 14) {
 /**
  * Return friendly badges and bitrate descriptions for various audio sources
  */
-export function getSourceInfo(sourceName, uri) {
+export function getSourceInfo(sourceName, uri, userData) {
     const src = (sourceName || "").toLowerCase();
     const rawUri = (uri || "").toLowerCase();
-    if (src === "jiosaavn" ||
-        rawUri.includes("saavncdn.com") ||
-        rawUri.includes("jiosaavn.com")) {
+    const isJio = Boolean(userData?.isJioSaavn) || src === "jiosaavn" || rawUri.includes("saavncdn.com") || rawUri.includes("jiosaavn.com");
+    const isAutoplay = Boolean(userData?.isAutoplay) || userData?.command === "Autoplay";
+    const cmd = isAutoplay ? "📻 Autoplay" : (userData?.command || (isJio ? "/jio" : "/play"));
+    if (isJio) {
         return {
             name: "JioSaavn Studio Master",
             quality: "320 kbps AAC Studio Audio",
-            badge: "💎 **JioSaavn Studio** `320 kbps AAC`",
+            badge: `💎 **JioSaavn Studio** \`320 kbps AAC\` *(via ${cmd})*`,
             color: 0x2bc5b4,
+            command: cmd,
         };
     }
     switch (src) {
@@ -83,43 +85,49 @@ export function getSourceInfo(sourceName, uri) {
             return {
                 name: "Deezer Hi-Fi",
                 quality: "320 kbps MP3 / Lossless FLAC",
-                badge: "💎 **Deezer Hi-Fi** `320 kbps / FLAC`",
+                badge: `💎 **Deezer Hi-Fi** \`320 kbps / FLAC\` *(via ${cmd})*`,
                 color: 0xef5466,
+                command: cmd,
             };
         case "spotify":
             return {
                 name: "Spotify",
                 quality: "Hi-Fi Studio Match",
-                badge: "🟢 **Spotify** `Hi-Fi Stream`",
+                badge: `🟢 **Spotify** \`Hi-Fi Stream\` *(via ${cmd})*`,
                 color: 0x1db954,
+                command: cmd,
             };
         case "applemusic":
             return {
                 name: "Apple Music",
                 quality: "Apple Lossless Matched",
-                badge: "🍎 **Apple Music** `HQ Stream`",
+                badge: `🍎 **Apple Music** \`HQ Stream\` *(via ${cmd})*`,
                 color: 0xfc3c44,
+                command: cmd,
             };
         case "youtubemusic":
             return {
                 name: "YouTube Music",
                 quality: "256 kbps AAC / Opus",
-                badge: "🎧 **YouTube Music HQ** `256 kbps`",
+                badge: `🎧 **YouTube Music HQ** \`256 kbps\` *(via ${cmd})*`,
                 color: 0xff0000,
+                command: cmd,
             };
         case "soundcloud":
             return {
                 name: "SoundCloud",
                 quality: "SoundCloud High Quality",
-                badge: "🟠 **SoundCloud** `HQ Stream`",
+                badge: `🟠 **SoundCloud** \`HQ Stream\` *(via ${cmd})*`,
                 color: 0xff5500,
+                command: cmd,
             };
         default:
             return {
                 name: sourceName || "Direct Stream",
                 quality: "High-Fidelity Opus",
-                badge: `🎵 **${sourceName || "Standard"}** \`HQ Opus\``,
+                badge: `🎵 **${sourceName || "Standard"}** \`HQ Opus\` *(via ${cmd})*`,
                 color: 0x5865f2,
+                command: cmd,
             };
     }
 }
