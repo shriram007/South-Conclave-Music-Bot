@@ -94,15 +94,15 @@ export async function smartSearch(
       } catch {}
     }
 
-    // 2. Try resolving across healthy proxy / alternate nodes (Jirayu proxy, Trinium, etc.)
+    // 2. Try resolving across healthy alternate nodes (Kasawa, Millo, Serenetia)
     const connectedNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n: any) => n.connected);
     const healthyOthers = connectedNodes.filter((n: any) => n.id !== player.node?.id && isNodeHealthy(n.id));
-    // Prioritize Jirayu (proxy-enabled for YouTube) and Trinium
+    // Prioritize Kasawa (supports direct HTTP + streaming) and Serenetia
     healthyOthers.sort((a: any, b: any) => {
-      if (a.id === "Jirayu-AuxNode") return -1;
-      if (b.id === "Jirayu-AuxNode") return 1;
-      if (a.id.includes("Trinium")) return -1;
-      if (b.id.includes("Trinium")) return 1;
+      if (a.id === "Kasawa-MasterNode") return -1;
+      if (b.id === "Kasawa-MasterNode") return 1;
+      if (a.id === "Serenetia-AuxNode") return -1;
+      if (b.id === "Serenetia-AuxNode") return 1;
       return 0;
     });
 
@@ -135,21 +135,19 @@ export async function smartSearch(
     (n: any) => n.connected && !n.id.includes("Custom")
   );
   const healthyNodes = connectedNodes.filter((n: any) => isNodeHealthy(n.id));
-  const jirayuNode = healthyNodes.find((n: any) => n.id === "Jirayu-AuxNode");
-  const triniumFast = healthyNodes.find((n: any) => n.id === "Trinium-FastNode");
-  const triniumStudio = healthyNodes.find((n: any) => n.id === "Trinium-Studio");
+  const kasawaNode = healthyNodes.find((n: any) => n.id === "Kasawa-MasterNode");
   const milloNode = healthyNodes.find((n: any) => n.id === "Millo-BackupNode");
-  const otherHealthy = healthyNodes.filter((n: any) => n.id !== "Millo-BackupNode" && n.id !== "Trinium-FastNode" && n.id !== "Trinium-Studio" && n.id !== "Jirayu-AuxNode");
+  const serenetiaNode = healthyNodes.find((n: any) => n.id === "Serenetia-AuxNode");
+  const otherHealthy = healthyNodes.filter((n: any) => n.id !== "Kasawa-MasterNode" && n.id !== "Millo-BackupNode" && n.id !== "Serenetia-AuxNode");
   const degradedList = connectedNodes.filter((n: any) => !isNodeHealthy(n.id));
 
-  // Prioritize Jirayu (proxy-enabled for YouTube) & Trinium, then Millo
+  // Prioritize Kasawa, Millo, Serenetia
   const playerNodeIfHealthy = (player.node?.connected && isNodeHealthy(player.node.id)) ? [player.node] : [];
   const nodesToTry = healthyNodes.length > 0 ? [
     ...playerNodeIfHealthy,
-    ...(jirayuNode && jirayuNode.id !== player.node?.id ? [jirayuNode] : []),
-    ...(triniumFast && triniumFast.id !== player.node?.id ? [triniumFast] : []),
-    ...(triniumStudio && triniumStudio.id !== player.node?.id ? [triniumStudio] : []),
+    ...(kasawaNode && kasawaNode.id !== player.node?.id ? [kasawaNode] : []),
     ...(milloNode && milloNode.id !== player.node?.id ? [milloNode] : []),
+    ...(serenetiaNode && serenetiaNode.id !== player.node?.id ? [serenetiaNode] : []),
     ...otherHealthy.filter((n: any) => n.id !== player.node?.id),
   ] : degradedList;
 

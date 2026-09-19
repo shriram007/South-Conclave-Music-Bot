@@ -133,15 +133,13 @@ export async function findAutoplayRecommendation(player, seedTrack) {
     const kasawaNode = healthyNodes.find((n) => n.id === "Kasawa-MasterNode");
     const milloNode = healthyNodes.find((n) => n.id === "Millo-BackupNode");
     const serenetiaNode = healthyNodes.find((n) => n.id === "Serenetia-AuxNode");
-    const jirayuNode = healthyNodes.find((n) => n.id === "Jirayu-AuxNode");
-    const otherHealthy = healthyNodes.filter((n) => n.id !== "Kasawa-MasterNode" && n.id !== "Millo-BackupNode" && n.id !== "Serenetia-AuxNode" && n.id !== "Jirayu-AuxNode");
+    const otherHealthy = healthyNodes.filter((n) => n.id !== "Kasawa-MasterNode" && n.id !== "Millo-BackupNode" && n.id !== "Serenetia-AuxNode");
     const degradedList = connectedNodes.filter((n) => !isNodeHealthy(n.id));
-    // Priority: Kasawa (supports direct 320k JioSaavn + YT/Spotify) > Millo > Serenetia > Jirayu
+    // Priority: Kasawa (supports direct 320k JioSaavn + YT/Spotify) > Millo > Serenetia
     const nodesToTry = healthyNodes.length > 0 ? [
         ...(kasawaNode ? [kasawaNode] : []),
         ...(milloNode ? [milloNode] : []),
         ...(serenetiaNode ? [serenetiaNode] : []),
-        ...(jirayuNode ? [jirayuNode] : []),
         ...otherHealthy,
     ] : degradedList;
     const historyIds = new Set(player.queue.previous.map((t) => t.info.identifier).filter((id) => Boolean(id)));
@@ -390,17 +388,6 @@ export function getMasterNodeConfigs() {
         port: 443,
         secure: true,
         id: "Serenetia-AuxNode",
-        retryAmount: 1000,
-        retryDelay: 5000,
-        retryTimespan: 180000,
-        requestSignalTimeoutMS: 7000,
-        enablePingOnStatsCheck: true,
-    }, {
-        authorization: "youshallnotpass",
-        host: "lavalink.jirayu.net",
-        port: 443,
-        secure: true,
-        id: "Jirayu-AuxNode",
         retryAmount: 1000,
         retryDelay: 5000,
         retryTimespan: 180000,
@@ -855,14 +842,12 @@ export function initLavalink(client) {
                 const kasawaNode = healthyOtherNodes.find((n) => n.id === "Kasawa-MasterNode");
                 const milloNode = healthyOtherNodes.find((n) => n.id === "Millo-BackupNode");
                 const serenetiaNode = healthyOtherNodes.find((n) => n.id === "Serenetia-AuxNode");
-                const jirayuNode = healthyOtherNodes.find((n) => n.id === "Jirayu-AuxNode");
-                const otherHealthy = healthyOtherNodes.filter((n) => n.id !== "Kasawa-MasterNode" && n.id !== "Millo-BackupNode" && n.id !== "Serenetia-AuxNode" && n.id !== "Jirayu-AuxNode");
+                const otherHealthy = healthyOtherNodes.filter((n) => n.id !== "Kasawa-MasterNode" && n.id !== "Millo-BackupNode" && n.id !== "Serenetia-AuxNode");
                 const degradedList = connectedNodes.filter((n) => !isNodeHealthy(n.id) && n.id !== player.node.id);
                 const nodesToTry = [
                     ...(kasawaNode ? [kasawaNode] : []),
                     ...(milloNode ? [milloNode] : []),
                     ...(serenetiaNode ? [serenetiaNode] : []),
-                    ...(jirayuNode ? [jirayuNode] : []),
                     ...otherHealthy,
                     ...degradedList,
                     player.node, // current failing node is only last resort
@@ -897,7 +882,6 @@ export function initLavalink(client) {
                     ...(kasawaNode ? [kasawaNode] : []),
                     ...(milloNode ? [milloNode] : []),
                     ...(serenetiaNode ? [serenetiaNode] : []),
-                    ...(jirayuNode ? [jirayuNode] : []),
                 ];
                 if (!recoveredTrack && track.info.uri && fastNodes.length > 0 && !trySoundCloudFirst) {
                     for (const node of fastNodes) {
@@ -1080,14 +1064,12 @@ export function getBestNode() {
         const cpu = stats?.cpu?.lavalinkLoad ?? 0;
         // Priority bonus (lower = preferred when load is equal)
         let priorityBonus = 20;
-        if (node.id === "Jirayu-AuxNode")
+        if (node.id === "Kasawa-MasterNode")
             priorityBonus = 0;
-        if (node.id === "Trinium-FastNode")
-            priorityBonus = 8;
-        if (node.id === "Trinium-Studio")
+        if (node.id === "Serenetia-AuxNode")
             priorityBonus = 10;
         if (node.id === "Millo-BackupNode")
-            priorityBonus = 30;
+            priorityBonus = 20;
         const score = (deficit * FRAME_DEFICIT_WEIGHT) +
             (playing * PLAYER_COUNT_WEIGHT) +
             (cpu * CPU_WEIGHT) +
@@ -1096,7 +1078,7 @@ export function getBestNode() {
     });
     scored.sort((a, b) => a.score - b.score);
     const winner = scored[0];
-    if (scored.length > 1 && winner.id !== "Jirayu-AuxNode") {
+    if (scored.length > 1 && winner.id !== "Kasawa-MasterNode") {
         // Only log when a non-default node wins (i.e., load-aware selection kicked in)
         console.log(`[Node Selector] Load-aware pick: "${winner.id}" (score ${winner.score.toFixed(0)}, ${winner.playing} streams, ${winner.deficit} deficit frames)`);
     }
