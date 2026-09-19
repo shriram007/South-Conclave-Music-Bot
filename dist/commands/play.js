@@ -96,7 +96,11 @@ async function smartSearch(player, query, isUrl, user) {
     }
     const serenetia = Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.id === "Serenetia-HighSpeed" && n.connected);
     const otherNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected && !n.id.includes("Custom") && n.id !== "Serenetia-HighSpeed");
-    const nodesToTry = serenetia ? [serenetia, ...otherNodes] : [player.node, ...otherNodes];
+    const nodesToTry = serenetia
+        ? [serenetia, ...otherNodes]
+        : (player.node?.connected
+            ? [player.node, ...otherNodes.filter((n) => n.id !== player.node.id)]
+            : otherNodes);
     // 1. Try YouTube Music (ytmsearch) across all connected nodes
     for (const node of nodesToTry) {
         try {
@@ -318,12 +322,14 @@ export const playCommand = {
                 autoDeleteReply(interaction, 10000);
                 return;
             }
-            // Ensure player is operating on Serenetia-HighSpeed (with active YouTube proxies) instead of blocked nodes
-            if (player.node?.id === "Trinium-FastNode") {
+            // Ensure player is operating on proxy nodes (with active YouTube proxies) instead of blocked nodes
+            if (player.node?.id === "Trinium-FastNode" || player.node?.id === "Jirayu-AuxNode") {
                 const serenetia = lavalink.nodeManager.nodes.get("Serenetia-HighSpeed");
-                if (serenetia?.connected) {
-                    console.log(`[Play Command] Migrating player from ${player.node.id} to Serenetia-HighSpeed...`);
-                    await player.changeNode(serenetia, false).catch(() => { });
+                const millo = lavalink.nodeManager.nodes.get("Millo-BackupNode");
+                const betterNode = serenetia?.connected ? serenetia : (millo?.connected ? millo : null);
+                if (betterNode && betterNode.id !== player.node.id) {
+                    console.log(`[Play Command] Migrating player from ${player.node.id} to ${betterNode.id}...`);
+                    await player.changeNode(betterNode, false).catch(() => { });
                 }
             }
             // Check if the user explicitly provided a genuine Playlist or Album URL (not an algorithmic mix)

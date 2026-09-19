@@ -48,45 +48,121 @@ export function isSameSongOrJunk(candidateTitle, previousTracks) {
     }
     return false;
 }
+export function getMasterNodeConfigs() {
+    const configs = [];
+    if (config.lavalink.host &&
+        config.lavalink.host !== "localhost" &&
+        !config.lavalink.host.includes("jirayu")) {
+        configs.push({
+            authorization: config.lavalink.password,
+            host: config.lavalink.host,
+            port: config.lavalink.port,
+            secure: config.lavalink.secure,
+            id: "Primary-CustomNode",
+            retryAmount: 1000,
+            retryDelay: 5000,
+            retryTimespan: 180000,
+            requestSignalTimeoutMS: 15000,
+            enablePingOnStatsCheck: true,
+        });
+    }
+    configs.push({
+        authorization: "https://seretia.link/discord",
+        host: "lavalinkv4.serenetia.com",
+        port: 443,
+        secure: true,
+        id: "Serenetia-HighSpeed",
+        retryAmount: 1000,
+        retryDelay: 5000,
+        retryTimespan: 180000,
+        requestSignalTimeoutMS: 15000,
+        enablePingOnStatsCheck: true,
+    }, {
+        authorization: "https://discord.gg/mjS5J2K3ep",
+        host: "lava-v4.millohost.my.id",
+        port: 443,
+        secure: true,
+        id: "Millo-BackupNode",
+        retryAmount: 1000,
+        retryDelay: 5000,
+        retryTimespan: 180000,
+        requestSignalTimeoutMS: 15000,
+        enablePingOnStatsCheck: true,
+    }, {
+        authorization: "free",
+        host: "lavalink-v4.triniumhost.com",
+        port: 443,
+        secure: true,
+        id: "Trinium-FastNode",
+        retryAmount: 1000,
+        retryDelay: 5000,
+        retryTimespan: 180000,
+        requestSignalTimeoutMS: 15000,
+        enablePingOnStatsCheck: true,
+    }, {
+        authorization: "youshallnotpass",
+        host: "lavalink.jirayu.net",
+        port: 443,
+        secure: true,
+        id: "Jirayu-AuxNode",
+        retryAmount: 1000,
+        retryDelay: 5000,
+        retryTimespan: 180000,
+        requestSignalTimeoutMS: 15000,
+        enablePingOnStatsCheck: true,
+    });
+    return configs;
+}
+let watchdogInterval = null;
+/**
+ * Self-healing watchdog: detects missing or destroyed nodes and automatically recreates & reconnects them
+ */
+export async function ensureNodesHealthy() {
+    if (!lavalink || !lavalink.nodeManager)
+        return;
+    const masterConfigs = getMasterNodeConfigs();
+    if (!lavalink.options?.client?.id) {
+        const clientId = discordClient?.user?.id || config.discord.clientId;
+        if (clientId) {
+            lavalink.options.client = {
+                ...lavalink.options.client,
+                id: clientId,
+                username: discordClient?.user?.username || "SouthConclaveBot",
+            };
+        }
+    }
+    for (const nodeConfig of masterConfigs) {
+        const existingNode = lavalink.nodeManager.nodes.get(nodeConfig.id);
+        if (!existingNode) {
+            console.log(`[Self-Healing Watchdog] Re-registering destroyed/missing node "${nodeConfig.id}"...`);
+            try {
+                const newNode = lavalink.nodeManager.createNode(nodeConfig);
+                await newNode.connect();
+                console.log(`[Self-Healing Watchdog] Node "${nodeConfig.id}" recreated and connected!`);
+            }
+            catch (err) {
+                console.warn(`[Self-Healing Watchdog] Reconnection failed for "${nodeConfig.id}":`, err?.message || err);
+            }
+        }
+        else if (!existingNode.connected && !existingNode.isNodeReconnecting) {
+            console.log(`[Self-Healing Watchdog] Triggering connect for idle disconnected node "${existingNode.id}"...`);
+            try {
+                existingNode.connect();
+            }
+            catch (err) {
+                console.warn(`[Self-Healing Watchdog] Failed connecting "${existingNode.id}":`, err?.message || err);
+            }
+        }
+    }
+}
 export function initLavalink(client) {
     discordClient = client;
     lavalink = new LavalinkManager({
-        nodes: [
-            ...(config.lavalink.host &&
-                config.lavalink.host !== "localhost" &&
-                !config.lavalink.host.includes("jirayu")
-                ? [
-                    {
-                        authorization: config.lavalink.password,
-                        host: config.lavalink.host,
-                        port: config.lavalink.port,
-                        secure: config.lavalink.secure,
-                        id: "Primary-CustomNode",
-                    },
-                ]
-                : []),
-            {
-                authorization: "https://seretia.link/discord",
-                host: "lavalinkv4.serenetia.com",
-                port: 443,
-                secure: true,
-                id: "Serenetia-HighSpeed",
-            },
-            {
-                authorization: "https://discord.gg/mjS5J2K3ep",
-                host: "lava-v4.millohost.my.id",
-                port: 443,
-                secure: true,
-                id: "Millo-BackupNode",
-            },
-            {
-                authorization: "free",
-                host: "lavalink-v4.triniumhost.com",
-                port: 443,
-                secure: true,
-                id: "Trinium-FastNode",
-            },
-        ],
+        nodes: getMasterNodeConfigs(),
+        client: {
+            id: config.discord.clientId || "",
+            username: "SouthConclaveBot",
+        },
         sendToShard: (guildId, payload) => {
             client.guilds.cache.get(guildId)?.shard.send(payload);
         },
@@ -117,6 +193,28 @@ export function initLavalink(client) {
     lavalink.nodeManager.on("error", (node, error) => {
         console.error(`[Lavalink] Node "${node.id}" encountered an error:`, error.message);
     });
+    // Self-Healing: if a node gets destroyed due to reconnection failure, auto-revive it
+    lavalink.nodeManager.on("destroy", (node, reason) => {
+        console.warn(`[Lavalink] Audio node "${node.id}" was destroyed (${reason}). Scheduling auto-revival in 3s...`);
+        setTimeout(() => {
+            ensureNodesHealthy().catch((err) => {
+                console.warn("[Lavalink] Auto-revival error:", err?.message || err);
+            });
+        }, 3000);
+    });
+    // Continuous 20s watchdog: guarantee nodes never stay dead after network/DNS outages
+    if (watchdogInterval)
+        clearInterval(watchdogInterval);
+    watchdogInterval = setInterval(() => {
+        try {
+            const anyConnected = Array.from(lavalink.nodeManager.nodes.values()).some((n) => n.connected);
+            const hasMissingNodes = getMasterNodeConfigs().some((c) => !lavalink.nodeManager.nodes.has(c.id));
+            if (!anyConnected || hasMissingNodes) {
+                ensureNodesHealthy().catch(() => { });
+            }
+        }
+        catch { }
+    }, 20000);
     // Dedicated Live Player Ticker (smooth 3.5s updates while playing)
     const liveTickers = new Map();
     function startLivePlayerTicker(player) {
@@ -226,7 +324,12 @@ export function initLavalink(client) {
             const rawAuthor = (lastTrack.info.author || "").replace(/- Topic/gi, "").trim();
             const cleanTitle = rawTitle.replace(/\|.*/, "").replace(/\[.*?\]/g, "").replace(/\(.*?\)/g, "").trim();
             console.log(`[Smart Autoplay] Queue ended. Finding fresh recommendation based on "${cleanTitle}" by "${rawAuthor}"...`);
-            const targetNode = lavalink.nodeManager.nodes.get("Serenetia-HighSpeed") || player.node;
+            const serenetia = lavalink.nodeManager.nodes.get("Serenetia-HighSpeed");
+            const targetNode = serenetia?.connected
+                ? serenetia
+                : (player.node?.connected
+                    ? player.node
+                    : Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected) || player.node);
             const historyIds = new Set(player.queue.previous.map((t) => t.info.identifier));
             // Try queries that return OTHER songs by the artist or similar artists (not the same song)
             const queriesToTry = [];
@@ -485,6 +588,12 @@ export function getBestNode() {
     const millo = lavalink.nodeManager.nodes.get("Millo-BackupNode");
     if (millo?.connected)
         return "Millo-BackupNode";
+    const trinium = lavalink.nodeManager.nodes.get("Trinium-FastNode");
+    if (trinium?.connected)
+        return "Trinium-FastNode";
+    const jirayu = lavalink.nodeManager.nodes.get("Jirayu-AuxNode");
+    if (jirayu?.connected)
+        return "Jirayu-AuxNode";
     const fallback = Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected && !n.id.includes("Custom"));
     return fallback?.id;
 }
@@ -521,28 +630,49 @@ export async function getOrCreatePlayer(interaction) {
     }
     let player = lavalink.getPlayer(interaction.guildId);
     if (!player) {
+        const connectedNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected);
+        if (connectedNodes.length === 0) {
+            // Trigger self-healing watchdog immediately
+            ensureNodesHealthy().catch(() => { });
+            return {
+                player: null,
+                error: "⚠️ **Audio servers are reconnecting:** The audio nodes temporarily disconnected after a network drop. Please wait ~5 seconds and try `/play` again!",
+            };
+        }
         const targetNode = getBestNode();
         console.log(`[Player] Creating player for guild ${interaction.guildId} in voice channel ${voiceChannel.name} (${voiceChannel.id}) on node "${targetNode || "default"}"`);
-        player = lavalink.createPlayer({
-            guildId: interaction.guildId,
-            voiceChannelId: voiceChannel.id,
-            textChannelId: interaction.channelId,
-            selfDeaf: true,
-            selfMute: false,
-            volume: 100,
-            instaUpdateFiltersFix: true,
-            applyVolumeAsFilter: false,
-            ...(targetNode ? { node: targetNode } : {}),
-        });
-        player.setData("hifi_active", false);
-        player.setData("eq_preset", "Normal (Flat)");
+        try {
+            player = lavalink.createPlayer({
+                guildId: interaction.guildId,
+                voiceChannelId: voiceChannel.id,
+                textChannelId: interaction.channelId,
+                selfDeaf: true,
+                selfMute: false,
+                volume: 100,
+                instaUpdateFiltersFix: true,
+                applyVolumeAsFilter: false,
+                ...(targetNode ? { node: targetNode } : {}),
+            });
+            player.setData("hifi_active", false);
+            player.setData("eq_preset", "Normal (Flat)");
+        }
+        catch (err) {
+            console.error("[Player Creation Error]:", err?.message || err);
+            ensureNodesHealthy().catch(() => { });
+            return {
+                player: null,
+                error: "⚠️ **Audio server initializing:** Reconnecting to audio nodes. Please try again in 5 seconds!",
+            };
+        }
     }
-    else if (player.node?.id === "Trinium-FastNode") {
-        // If existing player was assigned to Trinium (which has blocked YouTube IP), migrate to Serenetia proxy node
+    else if (player.node?.id === "Trinium-FastNode" || player.node?.id === "Jirayu-AuxNode") {
+        // If existing player was assigned to an aux node, prefer proxy nodes (Serenetia/Millo) for YouTube resilience
         const serenetia = lavalink.nodeManager.nodes.get("Serenetia-HighSpeed");
-        if (serenetia?.connected) {
-            console.log(`[Player] Migrating existing player from ${player.node.id} to Serenetia-HighSpeed proxy node...`);
-            await player.changeNode(serenetia, false).catch(() => { });
+        const millo = lavalink.nodeManager.nodes.get("Millo-BackupNode");
+        const betterNode = serenetia?.connected ? serenetia : (millo?.connected ? millo : null);
+        if (betterNode && betterNode.id !== player.node.id) {
+            console.log(`[Player] Migrating existing player from ${player.node.id} to ${betterNode.id} proxy node...`);
+            await player.changeNode(betterNode, false).catch(() => { });
         }
     }
     if (!player.connected) {
