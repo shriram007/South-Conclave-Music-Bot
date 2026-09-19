@@ -953,7 +953,7 @@ export function initLavalink(client: Client) {
         // ── TIER 0: JioSaavn 320 kbps Studio Audio Recovery (<500ms) ──
         // Completely circumvents YouTube datacenter 403 / IP rate limits and streams bit-perfect 320 kbps AAC audio!
         try {
-          const jioMatch = await resolveJioSaavnTrack(cleanTitle, cleanAuthor);
+          const jioMatch = await resolveJioSaavnTrack(rawTitle, track.info.author || "");
           if (jioMatch) {
             const jioLoaded = await loadJioSaavnAsLavalinkTrack(jioMatch, track.requester, [
               player.node,
@@ -1109,11 +1109,6 @@ export function initLavalink(client: Client) {
           }
 
           recoveredTrack.requester = track.requester;
-          // Preserve original title/author so autoplay language detection stays correct.
-          // Without this, "Munbe Vaa" recovered as a different YT URL seeds as GLOBAL
-          // because the new video's metadata may not have clear Tamil signals.
-          if (track.info.title) recoveredTrack.info.title = track.info.title;
-          if (track.info.author) recoveredTrack.info.author = track.info.author;
           if (track.info.artworkUrl) recoveredTrack.info.artworkUrl = track.info.artworkUrl;
           await player.play({ clientTrack: recoveredTrack, noReplace: false });
 

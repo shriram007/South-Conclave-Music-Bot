@@ -118,6 +118,66 @@ export async function searchJioSaavn(query: string, limit: number = 5): Promise<
 }
 
 /**
+ * Strips YouTube fluff (VEVO, record labels, channels, video/lyric tags) and extracts clean song & artist
+ */
+export function sanitizeMusicQuery(rawTitle: string, rawAuthor: string = ""): { searchTitle: string; searchArtist: string } {
+  let cleanAuthor = (rawAuthor || "")
+    .replace(/- Topic/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  // Strip labels, channels, VEVO
+  if (/vevo|t-series|sony|zee|saregama|aditya|tips|channel|music|records|south|official/i.test(cleanAuthor)) {
+    cleanAuthor = "";
+  }
+
+  let title = rawTitle
+    .replace(/\|.*/, "") // Strip everything after first pipe "|"
+    .replace(/\[.*?\]/g, "")
+    .replace(/\(.*?\)/g, "")
+    .replace(/official\s*(music)?\s*(video|audio|lyric|track)?/gi, "")
+    .replace(/lyric(al)?\s*(video|song|audio)?/gi, "")
+    .replace(/video\s*song/gi, "")
+    .replace(/full\s*song/gi, "")
+    .replace(/4k|8k|hd|hq|audio/gi, "")
+    .trim();
+
+  // If title has Movie - SongName or SongName - Artist
+  if (title.includes(" - ")) {
+    const parts = title.split(" - ").map((p) => p.trim());
+    if (parts.length === 2) {
+      return { searchTitle: parts[1], searchArtist: cleanAuthor || parts[0] };
+    }
+  }
+
+  return { searchTitle: title, searchArtist: cleanAuthor };
+}
+
+/**
+ * Checks whether a candidate title matches the target song name, accounting for typos and vowel doubling
+ */
+export function isFuzzyTitleMatch(titleA: string, titleB: string): boolean {
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const a = norm(titleA);
+  const b = norm(titleB);
+  if (!a || !b) return false;
+  if (a.includes(b) || b.includes(a)) return true;
+
+  // Squash consecutive repeated characters (e.g. "yaarumilla" -> "yarumila")
+  const squash = (s: string) => s.replace(/(.)\1+/g, "$1");
+  const sa = squash(a);
+  const sb = squash(b);
+  if (sa.includes(sb) || sb.includes(sa)) return true;
+
+  // Substring / character overlap ratio for phonetic spelling differences
+  let matchCount = 0;
+  for (const ch of b) {
+    if (a.includes(ch)) matchCount++;
+  }
+  return matchCount / Math.max(a.length, b.length) >= 0.75;
+}
+
+/**
  * Auto-corrects typos in song queries using real-time search suggestion signals
  */
 export async function getSpellingSuggestion(query: string): Promise<string | null> {
@@ -153,38 +213,36 @@ export async function getSpellingSuggestion(query: string): Promise<string | nul
  * Resolves a single best matching track from JioSaavn for a given song title and artist with typo correction
  */
 export async function resolveJioSaavnTrack(title: string, artist: string = ""): Promise<JioSaavnTrack | null> {
-  const query = `${title} ${artist}`.trim();
+  const { searchTitle, searchArtist } = sanitizeMusicQuery(title, artist);
+  const targetSongName = searchTitle || title;
+
+  const query = `${searchTitle} ${searchArtist}`.trim();
   let results = await searchJioSaavn(query, 5);
 
-  const cleanTarget = title.toLowerCase().replace(/[^a-z0-9]/g, "");
+  // 1. Check if any result matches the target song name
+  let best = results.find((t) => isFuzzyTitleMatch(t.title, targetSongName));
 
-  // Check if any result has reasonable match with query
-  const hasGoodMatch = results.some((t) => {
-    const cleanCand = t.title.toLowerCase().replace(/[^a-z0-9]/g, "");
-    return cleanCand.includes(cleanTarget) || cleanTarget.includes(cleanCand);
-  });
+  // 2. If no match and artist was supplied, try searching title alone (prevents channel/movie name collision)
+  if (!best && searchArtist) {
+    const soloResults = await searchJioSaavn(searchTitle, 5);
+    best = soloResults.find((t) => isFuzzyTitleMatch(t.title, targetSongName));
+    if (best) results = soloResults;
+  }
 
-  // If no direct results or title mismatch (e.g. typos), attempt smart typo correction
-  if (!hasGoodMatch) {
-    const suggestion = await getSpellingSuggestion(query);
+  // 3. If still no match, attempt typo auto-correction
+  if (!best) {
+    const suggestion = (await getSpellingSuggestion(query)) || (await getSpellingSuggestion(searchTitle));
     if (suggestion) {
       console.log(`[JioSaavn Resolver] Typo detected in "${query}". Auto-correcting to "${suggestion}"...`);
       const correctedResults = await searchJioSaavn(suggestion, 5);
-      if (correctedResults.length > 0) {
-        results = correctedResults;
-      }
+      best = correctedResults.find(
+        (t) => isFuzzyTitleMatch(t.title, suggestion) || isFuzzyTitleMatch(t.title, targetSongName)
+      );
     }
   }
 
-  if (results.length === 0) return null;
-
-  // Exact or close title match priority
-  const best = results.find((t) => {
-    const cleanCand = t.title.toLowerCase().replace(/[^a-z0-9]/g, "");
-    return cleanCand.includes(cleanTarget) || cleanTarget.includes(cleanCand);
-  });
-
-  return best || results[0] || null;
+  // STRICT: NEVER return results[0] unless it actually matches!
+  return best || null;
 }
 
 /**
