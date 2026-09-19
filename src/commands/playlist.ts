@@ -368,22 +368,41 @@ export const playlistCommand = {
       await interaction.editReply(`🔍 Loading **${playlist.tracks.length}** songs from **${playlist.name}**...`);
 
       let queuedCount = 0;
-      for (const t of playlist.tracks) {
-        try {
-          // Try direct URI search first
-          let res = await player.search({ query: t.uri }, interaction.user);
-          if (!res?.tracks?.length) {
-            // Fallback to high quality name search
-            res = await smartSearch(player, `${t.title} ${t.author}`, false, interaction.user);
-          }
+      let firstTrackStarted = false;
 
-          if (res?.tracks?.length) {
-            const track = res.tracks[0];
-            track.requester = interaction.user;
-            await player.queue.add(track);
+      // Fast concurrent batch resolver (batches of 5)
+      const BATCH_SIZE = 5;
+      for (let i = 0; i < playlist.tracks.length; i += BATCH_SIZE) {
+        const batch = playlist.tracks.slice(i, i + BATCH_SIZE);
+        const resolvedBatch = await Promise.all(
+          batch.map(async (t) => {
+            try {
+              let res = await player.search({ query: t.uri }, interaction.user);
+              if (!res?.tracks?.length) {
+                res = await smartSearch(player, `${t.title} ${t.author}`, false, interaction.user);
+              }
+              if (res?.tracks?.length) {
+                const trk = res.tracks[0];
+                trk.requester = interaction.user;
+                return trk;
+              }
+            } catch {}
+            return null;
+          })
+        );
+
+        for (const trk of resolvedBatch) {
+          if (trk) {
+            await player.queue.add(trk);
             queuedCount++;
+
+            // Start audio immediately on the very first track so user hears music in < 500ms
+            if (!firstTrackStarted && !player.playing && !player.paused) {
+              firstTrackStarted = true;
+              await player.play();
+            }
           }
-        } catch {}
+        }
       }
 
       if (queuedCount === 0) {
@@ -392,7 +411,7 @@ export const playlistCommand = {
         return;
       }
 
-      if (!player.playing && !player.paused) {
+      if (!firstTrackStarted && !player.playing && !player.paused) {
         await player.play();
       } else {
         await updateActivePlayerMessage(player);

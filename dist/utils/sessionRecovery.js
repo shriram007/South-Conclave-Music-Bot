@@ -13,6 +13,7 @@ function ensureDirectory() {
         fs.mkdirSync(DATA_DIR, { recursive: true });
     }
 }
+let lastSavedPayload = "";
 /**
  * Saves all active player states, queues, and playback timestamps to disk
  */
@@ -34,7 +35,8 @@ export function saveActiveSessions() {
                 textChannelId: player.textChannelId || undefined,
                 volume: player.volume || 100,
                 repeatMode: player.repeatMode || "off",
-                position: player.position || 0,
+                // Round position to nearest 5s to avoid disk churn on negligible timestamp delta
+                position: Math.round((player.position || 0) / 5000) * 5000,
                 autoplay: Boolean(player.getData("autoplay") ?? true),
                 normalized: Boolean(player.getData("normalized") ?? false),
                 currentTrack: player.queue.current ? cleanTrackForSerialization(player.queue.current) : undefined,
@@ -42,7 +44,12 @@ export function saveActiveSessions() {
                 savedAt: Date.now(),
             };
         }
-        fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessions, null, 2), "utf-8");
+        const payload = JSON.stringify(sessions, null, 2);
+        // Skip synchronous disk write if state has not meaningfully changed
+        if (payload === lastSavedPayload)
+            return;
+        lastSavedPayload = payload;
+        fs.writeFileSync(SESSIONS_FILE, payload, "utf-8");
     }
     catch (err) {
         console.warn("[Session Recovery] Error saving sessions:", err);

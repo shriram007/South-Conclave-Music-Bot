@@ -77,24 +77,41 @@ export const favoritesCommand = {
             }
             await interaction.editReply(`🔍 Loading **${favorites.length}** of your favorite songs...`);
             let queuedCount = 0;
-            for (const fav of favorites) {
-                try {
-                    const res = await player.search({ query: fav.uri }, interaction.user);
-                    if (res?.tracks?.length) {
-                        const track = res.tracks[0];
-                        track.requester = interaction.user;
+            let firstTrackStarted = false;
+            // Fast concurrent batch resolver (batches of 5)
+            const BATCH_SIZE = 5;
+            for (let i = 0; i < favorites.length; i += BATCH_SIZE) {
+                const batch = favorites.slice(i, i + BATCH_SIZE);
+                const resolvedBatch = await Promise.all(batch.map(async (fav) => {
+                    try {
+                        const res = await player.search({ query: fav.uri }, interaction.user);
+                        if (res?.tracks?.length) {
+                            const track = res.tracks[0];
+                            track.requester = interaction.user;
+                            return track;
+                        }
+                    }
+                    catch { }
+                    return null;
+                }));
+                for (const track of resolvedBatch) {
+                    if (track) {
                         await player.queue.add(track);
                         queuedCount++;
+                        // Start audio immediately on the very first track so user hears music in < 500ms
+                        if (!firstTrackStarted && !player.playing && !player.paused) {
+                            firstTrackStarted = true;
+                            await player.play();
+                        }
                     }
                 }
-                catch { }
             }
             if (queuedCount === 0) {
                 await interaction.editReply("❌ Failed to resolve your favorite tracks.");
                 autoDeleteReply(interaction, 8000);
                 return;
             }
-            if (!player.playing && !player.paused) {
+            if (!firstTrackStarted && !player.playing && !player.paused) {
                 await player.play();
             }
             else {

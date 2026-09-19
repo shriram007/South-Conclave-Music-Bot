@@ -618,6 +618,7 @@ export function initLavalink(client) {
         activePlayerMessages.delete(player.guildId);
         playerMessageCache.delete(player.guildId);
         clearGuildSession(player.guildId);
+        clearUpdaterState(player.guildId);
     });
     lavalink.on("trackStuck", async (player, track, payload) => {
         console.warn(`[Lavalink] Audio stream stuck for "${track?.info.title}" (${payload.thresholdMs}ms threshold). Seamlessly auto-skipping...`);
@@ -637,8 +638,13 @@ export function initLavalink(client) {
         }
         if (!track)
             return;
-        // Cache the failed track ID so neither recovery nor future searches pick it again
+        // Cache the failed track ID with FIFO limit (max 500 entries)
         if (track.info.identifier) {
+            if (restrictedTrackIds.size >= 500) {
+                const oldest = restrictedTrackIds.values().next().value;
+                if (oldest)
+                    restrictedTrackIds.delete(oldest);
+            }
             restrictedTrackIds.add(track.info.identifier);
         }
         // If single track loop is active, disable it to prevent an infinite error loop on this failing song
@@ -906,6 +912,12 @@ export async function getOrCreatePlayer(interaction) {
     return { player };
 }
 const updaterStates = new Map();
+export function clearUpdaterState(guildId) {
+    const s = updaterStates.get(guildId);
+    if (s?.timer)
+        clearTimeout(s.timer);
+    updaterStates.delete(guildId);
+}
 /**
  * Updates the active Now Playing message in the text channel with rate-limiting & queuing protection
  */

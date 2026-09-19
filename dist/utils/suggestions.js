@@ -233,8 +233,13 @@ export async function getMusicSuggestions(query, userFavorites = [], userPlaylis
         }
     }
     const finalResults = results.slice(0, 20);
-    // Cache final response
+    // Cache final response with bounded FIFO eviction (max 500 items)
     if (finalResults.length > 0) {
+        if (suggestionCache.size >= 500) {
+            const oldestKey = suggestionCache.keys().next().value;
+            if (oldestKey)
+                suggestionCache.delete(oldestKey);
+        }
         suggestionCache.set(cacheKey, {
             timestamp: Date.now(),
             data: finalResults,

@@ -248,23 +248,38 @@ export const playCommand = {
             const customPlaylist = getPlaylist(interaction.user.id, playlistName);
             if (customPlaylist && customPlaylist.tracks.length > 0) {
                 let queuedCount = 0;
-                for (const t of customPlaylist.tracks) {
-                    try {
-                        let trackRes = await player.search({ query: t.uri }, interaction.user);
-                        if (!trackRes?.tracks?.length) {
-                            trackRes = await smartSearch(player, `${t.title} ${t.author}`, false, interaction.user);
+                let firstTrackStarted = false;
+                const BATCH_SIZE = 5;
+                for (let i = 0; i < customPlaylist.tracks.length; i += BATCH_SIZE) {
+                    const batch = customPlaylist.tracks.slice(i, i + BATCH_SIZE);
+                    const resolved = await Promise.all(batch.map(async (t) => {
+                        try {
+                            let trackRes = await player.search({ query: t.uri }, interaction.user);
+                            if (!trackRes?.tracks?.length) {
+                                trackRes = await smartSearch(player, `${t.title} ${t.author}`, false, interaction.user);
+                            }
+                            if (trackRes?.tracks?.length) {
+                                const trk = trackRes.tracks[0];
+                                trk.requester = interaction.user;
+                                return trk;
+                            }
                         }
-                        if (trackRes?.tracks?.length) {
-                            const trk = trackRes.tracks[0];
-                            trk.requester = interaction.user;
+                        catch { }
+                        return null;
+                    }));
+                    for (const trk of resolved) {
+                        if (trk) {
                             await player.queue.add(trk);
                             queuedCount++;
+                            if (!firstTrackStarted && !player.playing && !player.paused) {
+                                firstTrackStarted = true;
+                                await player.play();
+                            }
                         }
                     }
-                    catch { }
                 }
                 if (queuedCount > 0) {
-                    if (!player.playing && !player.paused)
+                    if (!firstTrackStarted && !player.playing && !player.paused)
                         await player.play();
                     else
                         await updateActivePlayerMessage(player);
