@@ -67,6 +67,23 @@ export function parseJioSaavnSong(item) {
         uri: item.perma_url || (item.id ? `https://www.jiosaavn.com/song/${encodeURIComponent(title)}/${item.id}` : ""),
     };
 }
+async function safeJsonFetch(url, headers, timeoutMs = 5000) {
+    try {
+        const res = await fetch(url, {
+            headers,
+            signal: AbortSignal.timeout(timeoutMs),
+        });
+        if (!res.ok)
+            return null;
+        const text = await res.text();
+        if (!text || !text.trim())
+            return null;
+        return JSON.parse(text);
+    }
+    catch {
+        return null;
+    }
+}
 /**
  * Search JioSaavn for tracks matching the query
  */
@@ -82,16 +99,10 @@ export async function searchJioSaavn(query, limit = 5) {
             .replace(/audio song/gi, "")
             .trim();
         const searchUrl = `https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&_marker=0&cc=in&includeMetaTags=1&p=1&n=${limit}&q=${encodeURIComponent(cleanQuery)}`;
-        const res = await fetch(searchUrl, {
-            headers: {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                "Accept": "application/json",
-            },
-            signal: AbortSignal.timeout(5000),
-        });
-        if (!res.ok)
-            return [];
-        const data = await res.json();
+        const data = await safeJsonFetch(searchUrl, {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+        }, 5000);
         const rawResults = data?.results || [];
         if (!Array.isArray(rawResults) || rawResults.length === 0)
             return [];
@@ -143,18 +154,30 @@ export function sanitizeMusicQuery(rawTitle, rawAuthor = "") {
  * Checks whether a candidate title matches the target song name, accounting for typos and vowel doubling
  */
 export function isFuzzyTitleMatch(titleA, titleB) {
-    const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
-    const a = norm(titleA);
-    const b = norm(titleB);
+    const clean = (s) => s
+        .toLowerCase()
+        .replace(/\|.*/, "")
+        .replace(/\[.*?\]/g, "")
+        .replace(/\(.*?\)/g, "")
+        .replace(/from\s+.*/gi, "")
+        .replace(/video song/gi, "")
+        .replace(/lyric video/gi, "")
+        .replace(/audio song/gi, "")
+        .replace(/[^a-z0-9]/g, "")
+        .trim();
+    const a = clean(titleA);
+    const b = clean(titleB);
     if (!a || !b)
         return false;
+    if (a === b)
+        return true;
     if (a.includes(b) || b.includes(a))
         return true;
     // Squash consecutive repeated characters (e.g. "yaarumilla" -> "yarumila")
     const squash = (s) => s.replace(/(.)\1+/g, "$1");
     const sa = squash(a);
     const sb = squash(b);
-    if (sa.includes(sb) || sb.includes(sa))
+    if (sa === sb || sa.includes(sb) || sb.includes(sa))
         return true;
     // Substring / character overlap ratio for phonetic spelling differences
     let matchCount = 0;
@@ -229,7 +252,7 @@ export async function resolveJioSaavnTrack(title, artist = "") {
 /**
  * Generates an autoplay recommendation using JioSaavn's catalog in the exact same language and vibe
  */
-export async function findJioSaavnAutoplay(seedTitle, seedArtist, seedLanguage = "tamil", excludeIds = new Set()) {
+export async function findJioSaavnAutoplay(seedTitle, seedArtist, seedLanguage = "tamil", excludeIds = new Set(), previousTitles = []) {
     try {
         const queries = [
             `${seedArtist} ${seedLanguage} hits`,
@@ -238,11 +261,27 @@ export async function findJioSaavnAutoplay(seedTitle, seedArtist, seedLanguage =
             `${seedLanguage} super hit songs`,
         ];
         for (const q of queries) {
-            const results = await searchJioSaavn(q, 8);
-            const valid = results.filter((t) => !excludeIds.has(t.id) &&
-                !excludeIds.has(t.streamUrl) &&
-                (t.language === seedLanguage || seedLanguage === "global") &&
-                t.title.toLowerCase() !== seedTitle.toLowerCase());
+            const results = await searchJioSaavn(q, 10);
+            const valid = results.filter((t) => {
+                if (excludeIds.has(t.id) || excludeIds.has(t.streamUrl))
+                    return false;
+                if (t.language !== seedLanguage && seedLanguage !== "global")
+                    return false;
+                // Never replay the seed song or a variation with movie suffix
+                if (t.title.toLowerCase() === seedTitle.toLowerCase())
+                    return false;
+                if (isFuzzyTitleMatch(t.title, seedTitle))
+                    return false;
+                // Never replay any song already played or queued in the current session
+                for (const prev of previousTitles) {
+                    if (!prev)
+                        continue;
+                    if (t.title.toLowerCase() === prev.toLowerCase() || isFuzzyTitleMatch(t.title, prev)) {
+                        return false;
+                    }
+                }
+                return true;
+            });
             if (valid.length > 0) {
                 // Pick randomly from top 3 to keep discovery fresh
                 return valid[Math.floor(Math.random() * Math.min(3, valid.length))];
@@ -289,12 +328,8 @@ export async function resolveJioSaavnUrl(url) {
         const slug = segments.length >= 2 ? segments[segments.length - 2] : "";
         if (isSong) {
             const apiUrl = `https://www.jiosaavn.com/api.php?__call=webapi.get&token=${encodeURIComponent(token)}&type=song&_format=json&_marker=0&cc=in&includeMetaTags=1`;
-            const res = await fetch(apiUrl, {
-                headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" },
-                signal: AbortSignal.timeout(5000),
-            });
-            if (res.ok) {
-                const data = await res.json();
+            const data = await safeJsonFetch(apiUrl, { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" }, 5000);
+            if (data) {
                 const firstVal = Object.values(data)[0];
                 if (firstVal) {
                     const track = parseJioSaavnSong(firstVal);
@@ -312,12 +347,8 @@ export async function resolveJioSaavnUrl(url) {
         }
         if (isAlbum) {
             const apiUrl = `https://www.jiosaavn.com/api.php?__call=webapi.get&token=${encodeURIComponent(token)}&type=album&_format=json&_marker=0&cc=in`;
-            const res = await fetch(apiUrl, {
-                headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" },
-                signal: AbortSignal.timeout(7000),
-            });
-            if (res.ok) {
-                const data = await res.json();
+            const data = await safeJsonFetch(apiUrl, { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" }, 7000);
+            if (data) {
                 const rawSongs = data?.songs || data?.list || [];
                 const tracks = rawSongs.map(parseJioSaavnSong).filter((t) => Boolean(t));
                 const title = cleanText(data?.title || data?.name || slug.replace(/-/g, " ") || "JioSaavn Album");
@@ -328,12 +359,8 @@ export async function resolveJioSaavnUrl(url) {
         }
         if (isPlaylist) {
             const apiUrl = `https://www.jiosaavn.com/api.php?__call=webapi.get&token=${encodeURIComponent(token)}&type=playlist&_format=json&_marker=0&cc=in`;
-            const res = await fetch(apiUrl, {
-                headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" },
-                signal: AbortSignal.timeout(7000),
-            });
-            if (res.ok) {
-                const data = await res.json();
+            const data = await safeJsonFetch(apiUrl, { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" }, 7000);
+            if (data) {
                 const rawSongs = data?.songs || data?.list || [];
                 const tracks = rawSongs.map(parseJioSaavnSong).filter((t) => Boolean(t));
                 const title = cleanText(data?.title || data?.listname || slug.replace(/-/g, " ") || "JioSaavn Playlist");

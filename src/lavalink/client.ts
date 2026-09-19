@@ -173,22 +173,35 @@ export async function findAutoplayRecommendation(player: Player, seedTrack: Trac
 
   const isJioSeed = Boolean((seedTrack.userData as any)?.isJioSaavn) || seedTrack.info.sourceName === "jiosaavn";
 
+  const previousTitles = [
+    cleanTitle,
+    rawTitle,
+    ...(player.queue.current?.info?.title ? [player.queue.current.info.title] : []),
+    ...player.queue.previous.map((t) => t.info?.title).filter(Boolean),
+    ...player.queue.tracks.map((t) => t.info?.title).filter(Boolean),
+  ];
+
   // Strategy 0: If current playing track came from JioSaavn (/jio), keep streaming pristine 320k JioSaavn Studio Radio!
   if (isJioSeed && ["tamil", "telugu", "malayalam", "hindi", "punjabi"].includes(seedLang)) {
     try {
-      const jioAuto = await findJioSaavnAutoplay(cleanTitle, rawAuthor, seedLang, historyIds);
+      const jioAuto = await findJioSaavnAutoplay(cleanTitle, rawAuthor, seedLang, historyIds, previousTitles);
       if (jioAuto) {
-        const candidateNodes = [
-          player.node,
-          ...(kasawaNode ? [kasawaNode] : []),
-          ...nodesToTry,
-        ];
-        const converted = await loadJioSaavnAsLavalinkTrack(jioAuto, { displayName: "📻 Autoplay Radio" }, candidateNodes);
-        if (converted) {
-          console.log(`[Smart Autoplay] Found regional JioSaavn recommendation (${seedLang}): "${converted.track.info.title}" by "${converted.track.info.author}"`);
-          converted.track.requester = { displayName: "📻 Autoplay Radio" } as any;
-          (converted.track as any).userData = { ...(converted.track.userData || {}), command: "Autoplay", isAutoplay: true };
-          return converted.track;
+        const allPrev = [...player.queue.previous, ...(player.queue.current ? [player.queue.current] : [])];
+        if (isSameSongOrJunk(jioAuto.title, allPrev)) {
+          console.log(`[Smart Autoplay] Discarded JioSaavn duplicate of previous track: "${jioAuto.title}"`);
+        } else {
+          const candidateNodes = [
+            player.node,
+            ...(kasawaNode ? [kasawaNode] : []),
+            ...nodesToTry,
+          ];
+          const converted = await loadJioSaavnAsLavalinkTrack(jioAuto, { displayName: "📻 Autoplay Radio" }, candidateNodes);
+          if (converted) {
+            console.log(`[Smart Autoplay] Found regional JioSaavn recommendation (${seedLang}): "${converted.track.info.title}" by "${converted.track.info.author}"`);
+            converted.track.requester = { displayName: "📻 Autoplay Radio" } as any;
+            (converted.track as any).userData = { ...(converted.track.userData || {}), command: "Autoplay", isAutoplay: true };
+            return converted.track;
+          }
         }
       }
     } catch (e) {
@@ -311,15 +324,18 @@ export async function findAutoplayRecommendation(player: Player, seedTrack: Trac
   // Strategy 3: JioSaavn 320 kbps Autoplay Discovery (unrestricted, authentic 320 kbps studio audio)
   if (!foundCandidate) {
     try {
-      const jioRec = await findJioSaavnAutoplay(cleanTitle, rawAuthor, seedLang, historyIds);
+      const jioRec = await findJioSaavnAutoplay(cleanTitle, rawAuthor, seedLang, historyIds, previousTitles);
       if (jioRec) {
-        const jioCandidate = await loadJioSaavnAsLavalinkTrack(jioRec, seedTrack.requester, [
-          player.node,
-          ...nodesToTry,
-        ]);
-        if (jioCandidate) {
-          foundCandidate = jioCandidate.track;
-          console.log(`[Smart Autoplay] JioSaavn 320kbps discovery candidate: "${foundCandidate?.info?.title}" by "${foundCandidate?.info?.author}"`);
+        const allPrev = [...player.queue.previous, ...(player.queue.current ? [player.queue.current] : [])];
+        if (!isSameSongOrJunk(jioRec.title, allPrev)) {
+          const jioCandidate = await loadJioSaavnAsLavalinkTrack(jioRec, seedTrack.requester, [
+            player.node,
+            ...nodesToTry,
+          ]);
+          if (jioCandidate) {
+            foundCandidate = jioCandidate.track;
+            console.log(`[Smart Autoplay] JioSaavn 320kbps discovery candidate: "${foundCandidate?.info?.title}" by "${foundCandidate?.info?.author}"`);
+          }
         }
       }
     } catch (e) {
