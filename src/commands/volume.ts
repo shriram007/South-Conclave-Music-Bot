@@ -2,19 +2,19 @@ import {
   ChatInputCommandInteraction,
   SlashCommandBuilder,
 } from "discord.js";
-import { lavalink, updateActivePlayerMessage, validateVoiceGate } from "../lavalink/client.js";
+import { clearAllFilters, lavalink, updateActivePlayerMessage, validateVoiceGate } from "../lavalink/client.js";
 import { autoDeleteReply } from "../utils/cleanup.js";
 
 export const volumeCommand = {
   data: new SlashCommandBuilder()
     .setName("volume")
-    .setDescription("Adjust the playback volume (0% - 150%)")
+    .setDescription("Adjust the playback volume (0% - 125%)")
     .addIntegerOption((opt) =>
       opt
         .setName("level")
-        .setDescription("Volume percentage (0 to 150. Recommended: 100)")
+        .setDescription("Volume percentage (0 to 125. Recommended: 100 for studio quality)")
         .setMinValue(0)
-        .setMaxValue(150)
+        .setMaxValue(125)
         .setRequired(true)
     ),
 
@@ -32,10 +32,13 @@ export const volumeCommand = {
     const vol = interaction.options.getInteger("level", true);
     await player.setVolume(vol);
 
-    // Ensure filter volume multiplier is reset to 1.0 to avoid cumulative clipping
-    if (player.filterManager?.data) {
-      player.filterManager.data.volume = 1.0;
+    if (vol === 100) {
+      const activePreset = player.getData("filter_preset_key") as string | undefined;
+      if (!activePreset || activePreset === "reset") {
+        await clearAllFilters(player);
+      }
     }
+
     await updateActivePlayerMessage(player);
 
     let icon = "🔊";

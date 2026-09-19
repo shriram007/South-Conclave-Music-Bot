@@ -14,6 +14,46 @@ export const activePlayerMessages = new Map(); // guildId -> messageId
 export const playerMessageCache = new Map(); // guildId -> Message object (fast direct edit)
 // Global cache of stream-restricted / login-required video IDs so we never re-select or loop on them
 export const restrictedTrackIds = new Set();
+// Dynamic node health & circuit breaker: tracks nodes returning 502/HTML errors or timeouts
+export const degradedNodes = new Map(); // nodeId -> expiry timestamp
+export function markNodeDegraded(nodeId, durationMs = 180000) {
+    console.warn(`[Node Circuit Breaker] Marking node "${nodeId}" as degraded for ${Math.round(durationMs / 1000)}s`);
+    degradedNodes.set(nodeId, Date.now() + durationMs);
+}
+export function isNodeHealthy(nodeId) {
+    const expiry = degradedNodes.get(nodeId);
+    if (!expiry)
+        return true;
+    if (Date.now() > expiry) {
+        degradedNodes.delete(nodeId);
+        return true;
+    }
+    return false;
+}
+/**
+ * Completely disables all DSP filters and equalizers, guaranteeing 100% bit-perfect PCM passthrough
+ */
+export async function clearAllFilters(player) {
+    if (!player)
+        return;
+    player.filterManager.equalizerBands = [];
+    player.filterManager.data = {};
+    player.setData("hifi_active", false);
+    player.setData("eq_preset", "Normal (Flat)");
+    player.setData("filter_preset_key", "reset");
+    player.setData("normalized", false);
+    try {
+        if (player.node?.connected) {
+            await player.node.updatePlayer({
+                guildId: player.guildId,
+                playerOptions: { filters: {} },
+            });
+        }
+    }
+    catch (err) {
+        console.warn("[Player Filters] Error clearing filters:", err);
+    }
+}
 /**
  * Validates that an autoplay recommendation is a genuine new song and not a live/remix/cover of a previous song
  */
@@ -68,18 +108,8 @@ export function getMasterNodeConfigs() {
             enablePingOnStatsCheck: true,
         });
     }
+    // Priority 1: Millo-BackupNode (verified online, ultra-fast 753ms, 256k YouTube Music & Spotify HQ)
     configs.push({
-        authorization: "https://seretia.link/discord",
-        host: "lavalinkv4.serenetia.com",
-        port: 443,
-        secure: true,
-        id: "Serenetia-HighSpeed",
-        retryAmount: 1000,
-        retryDelay: 5000,
-        retryTimespan: 180000,
-        requestSignalTimeoutMS: 15000,
-        enablePingOnStatsCheck: true,
-    }, {
         authorization: "https://discord.gg/mjS5J2K3ep",
         host: "lava-v4.millohost.my.id",
         port: 443,
@@ -102,11 +132,33 @@ export function getMasterNodeConfigs() {
         requestSignalTimeoutMS: 15000,
         enablePingOnStatsCheck: true,
     }, {
+        authorization: "free",
+        host: "lavalink.triniumhost.com",
+        port: 4333,
+        secure: false,
+        id: "Trinium-Studio",
+        retryAmount: 1000,
+        retryDelay: 5000,
+        retryTimespan: 180000,
+        requestSignalTimeoutMS: 15000,
+        enablePingOnStatsCheck: true,
+    }, {
         authorization: "youshallnotpass",
         host: "lavalink.jirayu.net",
         port: 443,
         secure: true,
         id: "Jirayu-AuxNode",
+        retryAmount: 1000,
+        retryDelay: 5000,
+        retryTimespan: 180000,
+        requestSignalTimeoutMS: 15000,
+        enablePingOnStatsCheck: true,
+    }, {
+        authorization: "https://seretia.link/discord",
+        host: "lavalinkv4.serenetia.com",
+        port: 443,
+        secure: true,
+        id: "Serenetia-HighSpeed",
         retryAmount: 1000,
         retryDelay: 5000,
         retryTimespan: 180000,
@@ -336,15 +388,20 @@ export function initLavalink(client) {
             const cleanTitle = rawTitle.replace(/\|.*/, "").replace(/\[.*?\]/g, "").replace(/\(.*?\)/g, "").trim();
             const videoId = lastTrack.info.identifier;
             console.log(`[Smart Autoplay] Queue ended. Finding AI radio recommendations based on "${cleanTitle}" by "${rawAuthor}"...`);
-            // Try healthy nodes with priority on Millo and Serenetia
+            // Try verified healthy nodes with top priority on Millo and Trinium
             const connectedNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected);
-            const milloNode = connectedNodes.find((n) => n.id === "Millo-BackupNode");
-            const serenetiaNode = connectedNodes.find((n) => n.id === "Serenetia-HighSpeed");
-            const otherNodes = connectedNodes.filter((n) => n.id !== "Millo-BackupNode" && n.id !== "Serenetia-HighSpeed");
+            const healthyNodes = connectedNodes.filter((n) => isNodeHealthy(n.id));
+            const milloNode = healthyNodes.find((n) => n.id === "Millo-BackupNode");
+            const triniumFast = healthyNodes.find((n) => n.id === "Trinium-FastNode");
+            const triniumStudio = healthyNodes.find((n) => n.id === "Trinium-Studio");
+            const otherHealthy = healthyNodes.filter((n) => n.id !== "Millo-BackupNode" && n.id !== "Trinium-FastNode" && n.id !== "Trinium-Studio");
+            const degradedList = connectedNodes.filter((n) => !isNodeHealthy(n.id));
             const nodesToTry = [
                 ...(milloNode ? [milloNode] : []),
-                ...(serenetiaNode ? [serenetiaNode] : []),
-                ...otherNodes,
+                ...(triniumFast ? [triniumFast] : []),
+                ...(triniumStudio ? [triniumStudio] : []),
+                ...otherHealthy,
+                ...degradedList,
             ];
             const historyIds = new Set(player.queue.previous.map((t) => t.info.identifier));
             let foundTrack = null;
@@ -398,7 +455,11 @@ export function initLavalink(client) {
                         }
                     }
                     catch (e) {
-                        console.warn(`[Smart Autoplay] RD Radio lookup on node "${node.id}" failed:`, e?.message || e);
+                        const errMsg = e?.message || String(e);
+                        if (errMsg.includes("Unexpected token '<'") || errMsg.includes("<html>") || errMsg.includes("502")) {
+                            markNodeDegraded(node.id);
+                        }
+                        console.warn(`[Smart Autoplay] RD Radio lookup on node "${node.id}" failed:`, errMsg);
                     }
                 }
             }
@@ -432,7 +493,11 @@ export function initLavalink(client) {
                             }
                         }
                         catch (e) {
-                            console.warn(`[Smart Autoplay] Search failed on "${node.id}" for query "${query}":`, e?.message || e);
+                            const errMsg = e?.message || String(e);
+                            if (errMsg.includes("Unexpected token '<'") || errMsg.includes("<html>") || errMsg.includes("502")) {
+                                markNodeDegraded(node.id);
+                            }
+                            console.warn(`[Smart Autoplay] Search failed on "${node.id}" for query "${query}":`, errMsg);
                         }
                     }
                 }
@@ -515,6 +580,9 @@ export function initLavalink(client) {
     lavalink.on("trackError", async (player, track, payload) => {
         const errorMsg = payload?.exception?.message || JSON.stringify(payload);
         console.error(`[Lavalink] Error playing "${track?.info.title}":`, errorMsg);
+        if (errorMsg.includes("Unexpected token '<'") || errorMsg.includes("<html>") || errorMsg.includes("502")) {
+            markNodeDegraded(player.node.id);
+        }
         if (!track)
             return;
         // Cache the failed track ID so neither recovery nor future searches pick it again
@@ -560,11 +628,21 @@ export function initLavalink(client) {
                 const cleanAuthor = (track.info.author || "").replace(/- Topic/gi, "").trim();
                 const fallbackQuery = `${cleanTitle} ${cleanAuthor}`.trim();
                 console.log(`[Universal Recovery] Stream restricted for "${rawTitle}" (ID: ${failedId}). Attempt #${recoveryAttempts} auto-recovering as "${fallbackQuery}"...`);
-                // Prioritize Serenetia (verified working YouTube proxy) and healthy nodes
+                // Prioritize healthy nodes (Millo and Trinium)
                 const connectedNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected && !n.id.includes("Custom"));
-                const serenetiaNode = connectedNodes.find((n) => n.id === "Serenetia-HighSpeed");
-                const otherNodes = connectedNodes.filter((n) => n.id !== (serenetiaNode?.id || player.node.id));
-                const nodesToTry = serenetiaNode ? [serenetiaNode, ...otherNodes] : (player.node.connected ? [player.node, ...otherNodes] : otherNodes);
+                const healthyNodes = connectedNodes.filter((n) => isNodeHealthy(n.id));
+                const milloNode = healthyNodes.find((n) => n.id === "Millo-BackupNode");
+                const triniumFast = healthyNodes.find((n) => n.id === "Trinium-FastNode");
+                const triniumStudio = healthyNodes.find((n) => n.id === "Trinium-Studio");
+                const otherHealthy = healthyNodes.filter((n) => n.id !== "Millo-BackupNode" && n.id !== "Trinium-FastNode" && n.id !== "Trinium-Studio");
+                const degradedList = connectedNodes.filter((n) => !isNodeHealthy(n.id));
+                const nodesToTry = [
+                    ...(milloNode ? [milloNode] : []),
+                    ...(triniumFast ? [triniumFast] : []),
+                    ...(triniumStudio ? [triniumStudio] : []),
+                    ...otherHealthy,
+                    ...degradedList,
+                ];
                 let recoveredTrack = null;
                 let targetNode = player.node;
                 // On attempt #2+, immediately prioritize SoundCloud to bypass YouTube datacenter IP blocks completely
@@ -618,7 +696,11 @@ export function initLavalink(client) {
                         }
                     }
                     catch (e) {
-                        console.warn(`[Universal Recovery] Search failed on node ${node.id}:`, e?.message);
+                        const errMsg = e?.message || String(e);
+                        if (errMsg.includes("Unexpected token '<'") || errMsg.includes("<html>") || errMsg.includes("502")) {
+                            markNodeDegraded(node.id);
+                        }
+                        console.warn(`[Universal Recovery] Search failed on node ${node.id}:`, errMsg);
                     }
                 }
                 if (recoveredTrack) {
@@ -661,21 +743,31 @@ export function initLavalink(client) {
 export function getBestNode() {
     if (config.lavalink.host && config.lavalink.host !== "localhost" && !config.lavalink.host.includes("jirayu")) {
         const custom = lavalink.nodeManager.nodes.get("Primary-CustomNode");
-        if (custom?.connected)
+        if (custom?.connected && isNodeHealthy("Primary-CustomNode"))
             return "Primary-CustomNode";
     }
-    const serenetia = lavalink.nodeManager.nodes.get("Serenetia-HighSpeed");
-    if (serenetia?.connected)
-        return "Serenetia-HighSpeed";
+    // Priority 1: Millo-BackupNode (verified 200 OK YouTube & Spotify HQ)
     const millo = lavalink.nodeManager.nodes.get("Millo-BackupNode");
-    if (millo?.connected)
+    if (millo?.connected && isNodeHealthy("Millo-BackupNode"))
         return "Millo-BackupNode";
+    // Priority 2: Trinium nodes
     const trinium = lavalink.nodeManager.nodes.get("Trinium-FastNode");
-    if (trinium?.connected)
+    if (trinium?.connected && isNodeHealthy("Trinium-FastNode"))
         return "Trinium-FastNode";
+    const triniumStudio = lavalink.nodeManager.nodes.get("Trinium-Studio");
+    if (triniumStudio?.connected && isNodeHealthy("Trinium-Studio"))
+        return "Trinium-Studio";
+    // Priority 3: Jirayu
     const jirayu = lavalink.nodeManager.nodes.get("Jirayu-AuxNode");
-    if (jirayu?.connected)
+    if (jirayu?.connected && isNodeHealthy("Jirayu-AuxNode"))
         return "Jirayu-AuxNode";
+    // Priority 4: Serenetia (only if healthy)
+    const serenetia = lavalink.nodeManager.nodes.get("Serenetia-HighSpeed");
+    if (serenetia?.connected && isNodeHealthy("Serenetia-HighSpeed"))
+        return "Serenetia-HighSpeed";
+    const anyHealthy = Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected && isNodeHealthy(n.id) && !n.id.includes("Custom"));
+    if (anyHealthy)
+        return anyHealthy.id;
     const fallback = Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected && !n.id.includes("Custom"));
     return fallback?.id;
 }
@@ -747,14 +839,15 @@ export async function getOrCreatePlayer(interaction) {
             };
         }
     }
-    else if (player.node?.id === "Trinium-FastNode" || player.node?.id === "Jirayu-AuxNode") {
-        // If existing player was assigned to an aux node, prefer proxy nodes (Serenetia/Millo) for YouTube resilience
-        const serenetia = lavalink.nodeManager.nodes.get("Serenetia-HighSpeed");
-        const millo = lavalink.nodeManager.nodes.get("Millo-BackupNode");
-        const betterNode = serenetia?.connected ? serenetia : (millo?.connected ? millo : null);
-        if (betterNode && betterNode.id !== player.node.id) {
-            console.log(`[Player] Migrating existing player from ${player.node.id} to ${betterNode.id} proxy node...`);
-            await player.changeNode(betterNode, false).catch(() => { });
+    else if (!isNodeHealthy(player.node?.id) || player.node?.id === "Serenetia-HighSpeed") {
+        // If existing player was assigned to a degraded node (e.g. Serenetia throwing 502), migrate to best healthy node
+        const bestNodeId = getBestNode();
+        if (bestNodeId && bestNodeId !== player.node?.id) {
+            const betterNode = lavalink.nodeManager.nodes.get(bestNodeId);
+            if (betterNode?.connected) {
+                console.log(`[Player] Migrating player from degraded "${player.node?.id}" to healthy "${betterNode.id}"...`);
+                await player.changeNode(betterNode, false).catch(() => { });
+            }
         }
     }
     if (!player.connected) {

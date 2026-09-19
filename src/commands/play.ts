@@ -4,7 +4,7 @@ import {
   EmbedBuilder,
   SlashCommandBuilder,
 } from "discord.js";
-import { getOrCreatePlayer, lavalink, restrictedTrackIds, updateActivePlayerMessage } from "../lavalink/client.js";
+import { getOrCreatePlayer, isNodeHealthy, lavalink, markNodeDegraded, restrictedTrackIds, updateActivePlayerMessage } from "../lavalink/client.js";
 import { autoDeleteReply } from "../utils/cleanup.js";
 import { getFavorites } from "../utils/favorites.js";
 import { formatDuration, getSourceInfo, isRelevantTrack } from "../utils/formatters.js";
@@ -109,29 +109,53 @@ async function smartSearch(
     return null;
   }
 
-  const serenetia = Array.from(lavalink.nodeManager.nodes.values()).find((n: any) => n.id === "Serenetia-HighSpeed" && n.connected);
-  const otherNodes = Array.from(lavalink.nodeManager.nodes.values()).filter(
-    (n: any) => n.connected && !n.id.includes("Custom") && n.id !== "Serenetia-HighSpeed"
+  const connectedNodes = Array.from(lavalink.nodeManager.nodes.values()).filter(
+    (n: any) => n.connected && !n.id.includes("Custom")
   );
-  const nodesToTry = serenetia
-    ? [serenetia, ...otherNodes]
-    : (player.node?.connected
-      ? [player.node, ...otherNodes.filter((n: any) => n.id !== player.node.id)]
-      : otherNodes);
+  const healthyNodes = connectedNodes.filter((n: any) => isNodeHealthy(n.id));
+  const milloNode = healthyNodes.find((n: any) => n.id === "Millo-BackupNode");
+  const triniumFast = healthyNodes.find((n: any) => n.id === "Trinium-FastNode");
+  const triniumStudio = healthyNodes.find((n: any) => n.id === "Trinium-Studio");
+  const otherHealthy = healthyNodes.filter((n: any) => n.id !== "Millo-BackupNode" && n.id !== "Trinium-FastNode" && n.id !== "Trinium-Studio");
+  const degradedList = connectedNodes.filter((n: any) => !isNodeHealthy(n.id));
 
-  // 1. Try YouTube Music (ytmsearch) across all connected nodes
+  // Try current player node if healthy, otherwise Millo -> Trinium -> others
+  const playerNodeIfHealthy = (player.node?.connected && isNodeHealthy(player.node.id)) ? [player.node] : [];
+  const nodesToTry = [
+    ...playerNodeIfHealthy,
+    ...(milloNode && milloNode.id !== player.node?.id ? [milloNode] : []),
+    ...(triniumFast && triniumFast.id !== player.node?.id ? [triniumFast] : []),
+    ...(triniumStudio && triniumStudio.id !== player.node?.id ? [triniumStudio] : []),
+    ...otherHealthy.filter((n: any) => n.id !== player.node?.id),
+    ...degradedList,
+  ];
+
+  // Helper to ensure player is assigned to the healthy resolving node
+  const syncPlayerNode = (targetNode: any) => {
+    if (player.node && player.node.id !== targetNode.id && (!player.node.connected || !isNodeHealthy(player.node.id))) {
+      console.log(`[SmartSearch] Migrating player from degraded ${player.node.id} to healthy search node ${targetNode.id}...`);
+      player.changeNode(targetNode, false).catch(() => {});
+    }
+  };
+
+  // 1. Try YouTube Music (ytmsearch) across connected healthy nodes
   for (const node of nodesToTry) {
     try {
       const res = await node.search({ query, source: "ytmsearch" }, user);
       if (res?.tracks?.length && res.loadType !== "empty" && res.loadType !== "error") {
         const viable = res.tracks.filter((t: any) => !restrictedTrackIds.has(t.info.identifier));
         if (viable.length > 0) {
+          syncPlayerNode(node);
           console.log(`[SmartSearch] Found "${viable[0].info.title}" via ytmsearch on node "${node.id}"`);
           return { ...res, tracks: viable };
         }
       }
-    } catch (e) {
-      console.warn(`[SmartSearch] ytmsearch on "${node.id}" failed:`, (e as any)?.message);
+    } catch (e: any) {
+      const errMsg = e?.message || String(e);
+      if (errMsg.includes("Unexpected token '<'") || errMsg.includes("<html>") || errMsg.includes("502")) {
+        markNodeDegraded(node.id);
+      }
+      console.warn(`[SmartSearch] ytmsearch on "${node.id}" failed:`, errMsg);
     }
   }
 
@@ -142,11 +166,17 @@ async function smartSearch(
       if (res?.tracks?.length && res.loadType !== "empty" && res.loadType !== "error") {
         const viable = res.tracks.filter((t: any) => !restrictedTrackIds.has(t.info.identifier) && isRelevantTrack(t.info.title, query));
         if (viable.length > 0) {
+          syncPlayerNode(node);
           console.log(`[SmartSearch] Found "${viable[0].info.title}" via ytsearch (audio) on node "${node.id}"`);
           return { ...res, tracks: viable };
         }
       }
-    } catch {}
+    } catch (e: any) {
+      const errMsg = e?.message || String(e);
+      if (errMsg.includes("Unexpected token '<'") || errMsg.includes("<html>") || errMsg.includes("502")) {
+        markNodeDegraded(node.id);
+      }
+    }
   }
 
   // 3. Try SoundCloud search (scsearch) - ZERO YouTube login walls, fast & unrestricted, verified relevance
@@ -156,11 +186,17 @@ async function smartSearch(
       if (res?.tracks?.length && res.loadType !== "empty" && res.loadType !== "error") {
         const viable = res.tracks.filter((t: any) => !restrictedTrackIds.has(t.info.identifier) && isRelevantTrack(t.info.title, query));
         if (viable.length > 0) {
+          syncPlayerNode(node);
           console.log(`[SmartSearch] Found "${viable[0].info.title}" via scsearch on node "${node.id}"`);
           return { ...res, tracks: viable };
         }
       }
-    } catch {}
+    } catch (e: any) {
+      const errMsg = e?.message || String(e);
+      if (errMsg.includes("Unexpected token '<'") || errMsg.includes("<html>") || errMsg.includes("502")) {
+        markNodeDegraded(node.id);
+      }
+    }
   }
 
   // 4. Standard ytsearch fallback
@@ -170,11 +206,17 @@ async function smartSearch(
       if (res?.tracks?.length && res.loadType !== "empty" && res.loadType !== "error") {
         const viable = res.tracks.filter((t: any) => !restrictedTrackIds.has(t.info.identifier));
         if (viable.length > 0) {
+          syncPlayerNode(node);
           console.log(`[SmartSearch] Found "${viable[0].info.title}" via ytsearch on node "${node.id}"`);
           return { ...res, tracks: viable };
         }
       }
-    } catch {}
+    } catch (e: any) {
+      const errMsg = e?.message || String(e);
+      if (errMsg.includes("Unexpected token '<'") || errMsg.includes("<html>") || errMsg.includes("502")) {
+        markNodeDegraded(node.id);
+      }
+    }
   }
 
   return null;

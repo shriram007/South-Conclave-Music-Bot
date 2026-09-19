@@ -6,6 +6,7 @@ import {
 } from "discord.js";
 import {
   activePlayerMessages,
+  clearAllFilters,
   discordClient,
   lavalink,
   smoothFadePause,
@@ -121,9 +122,7 @@ export const stopCommand = {
     const gate = await validateVoiceGate(interaction, player);
     if (!gate.allowed) return interaction.reply({ content: gate.error!, ephemeral: true });
 
-    await player.filterManager.resetFilters().catch(() => {});
-    player.setData("hifi_active", false);
-    player.setData("eq_preset", "Normal (Flat)");
+    await clearAllFilters(player).catch(() => {});
 
     const prevMsgId = activePlayerMessages.get(interaction.guildId!);
     if (prevMsgId && player.textChannelId) {

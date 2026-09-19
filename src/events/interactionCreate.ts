@@ -8,6 +8,7 @@ import {
 import { commandMap } from "../commands/index.js";
 import { fetchSongLyrics } from "../commands/lyrics.js";
 import {
+  clearAllFilters,
   lavalink,
   smoothFadePause,
   smoothFadeResume,
@@ -291,13 +292,11 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
         const isCurrentlyActive = Boolean(player.getData("hifi_active"));
         let hifiNoticeText = "";
         if (isCurrentlyActive) {
-          player.setData("hifi_active", false);
-          player.setData("filter_preset_key", "reset");
-          player.setData("eq_preset", "Normal (Flat)");
-          await player.filterManager.clearEQ();
+          await clearAllFilters(player);
           await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
-          hifiNoticeText = "🔄 Equalizer reset to **Normal (Flat)**.";
+          hifiNoticeText = "🔄 Equalizer reset to **Normal (Flat)** (pure lossless audio).";
         } else {
+          await clearAllFilters(player);
           player.setData("hifi_active", true);
           player.setData("filter_preset_key", "hifi");
           player.setData("eq_preset", "💎 Hi-Fi Studio");
@@ -475,8 +474,20 @@ async function handleSelectMenuInteraction(interaction: StringSelectMenuInteract
 
     if (interaction.customId === "player_filter_menu") {
       const preset = interaction.values[0];
-      await player.filterManager.resetFilters();
-      await player.filterManager.clearEQ();
+
+      if (preset === "reset") {
+        await clearAllFilters(player);
+        await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
+        if (interaction.channel && "send" in interaction.channel) {
+          const notice = await (interaction.channel as any).send({
+            content: `🔄 Equalizer reset to **Normal (Flat)** (by **${interaction.user.username}**).`,
+          }).catch(() => null);
+          if (notice) autoDeleteMessage(notice, 5000);
+        }
+        return;
+      }
+
+      await clearAllFilters(player);
       player.setData("filter_preset_key", preset);
 
       let presetLabel = "Normal (Flat)";

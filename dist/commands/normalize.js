@@ -1,11 +1,18 @@
 import { EmbedBuilder, SlashCommandBuilder, } from "discord.js";
-import { lavalink, validateVoiceGate } from "../lavalink/client.js";
+import { clearAllFilters, lavalink, validateVoiceGate } from "../lavalink/client.js";
 import { autoDeleteReply } from "../utils/cleanup.js";
 /**
  * Applies or removes loudness normalization filter on a player
  */
 export async function applyLoudnessNormalization(player, enable) {
     player.setData("normalized", enable);
+    if (!enable) {
+        const activePreset = player.getData("filter_preset_key");
+        if (!activePreset || activePreset === "reset") {
+            await clearAllFilters(player);
+        }
+        return true;
+    }
     try {
         // Priority 1: Lavalink LavaDspx Plugin adaptive normalization
         if (player.filterManager?.lavalinkLavaDspxPlugin?.toggleNormalization) {
@@ -20,17 +27,10 @@ export async function applyLoudnessNormalization(player, enable) {
     catch (err) {
         console.warn("[Normalization] LavaDspx filter toggle error:", err);
     }
-    // Priority 2: Universal fallback via Lavalink volume limiter & gain filter
+    // Priority 2: Universal fallback via comfortable gain filter
     try {
-        if (enable) {
-            // Set uniform comfortable volume cap to prevent clipping
-            player.filterManager.data.volume = 0.9;
-            await player.filterManager.applyPlayerFilters();
-        }
-        else {
-            player.filterManager.data.volume = 1.0;
-            await player.filterManager.applyPlayerFilters();
-        }
+        player.filterManager.data.volume = 0.95;
+        await player.filterManager.applyPlayerFilters();
         return true;
     }
     catch (err) {

@@ -1,5 +1,5 @@
 import { SlashCommandBuilder, } from "discord.js";
-import { activePlayerMessages, discordClient, lavalink, smoothFadePause, smoothFadeResume, updateActivePlayerMessage, validateVoiceGate, } from "../lavalink/client.js";
+import { activePlayerMessages, clearAllFilters, discordClient, lavalink, smoothFadePause, smoothFadeResume, updateActivePlayerMessage, validateVoiceGate, } from "../lavalink/client.js";
 import { autoDeleteReply } from "../utils/cleanup.js";
 import { formatDuration } from "../utils/formatters.js";
 async function getPlayerWithGate(interaction) {
@@ -98,9 +98,7 @@ export const stopCommand = {
         const gate = await validateVoiceGate(interaction, player);
         if (!gate.allowed)
             return interaction.reply({ content: gate.error, ephemeral: true });
-        await player.filterManager.resetFilters().catch(() => { });
-        player.setData("hifi_active", false);
-        player.setData("eq_preset", "Normal (Flat)");
+        await clearAllFilters(player).catch(() => { });
         const prevMsgId = activePlayerMessages.get(interaction.guildId);
         if (prevMsgId && player.textChannelId) {
             const chan = discordClient?.channels.cache.get(player.textChannelId);

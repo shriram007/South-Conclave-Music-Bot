@@ -1,5 +1,5 @@
 import { SlashCommandBuilder, } from "discord.js";
-import { lavalink, updateActivePlayerMessage, validateVoiceGate } from "../lavalink/client.js";
+import { clearAllFilters, lavalink, updateActivePlayerMessage, validateVoiceGate } from "../lavalink/client.js";
 import { autoDeleteReply } from "../utils/cleanup.js";
 import { EQ_PRESETS } from "../utils/equalizer.js";
 export const filterCommand = {
@@ -23,9 +23,15 @@ export const filterCommand = {
         const preset = interaction.options.getString("preset", true);
         await interaction.deferReply();
         try {
+            if (preset === "reset") {
+                await clearAllFilters(player);
+                await updateActivePlayerMessage(player);
+                await interaction.editReply("🔄 **Equalizer Reset!** Streaming flat, 100% bit-perfect pure master audio.");
+                autoDeleteReply(interaction, 8000);
+                return;
+            }
             // Clear previous filters before applying new one to prevent conflicts
-            await player.filterManager.resetFilters();
-            await player.filterManager.clearEQ();
+            await clearAllFilters(player);
             player.setData("filter_preset_key", preset);
             let replyText = "🔄 **Equalizer Reset!** Streaming flat, pure master audio.";
             switch (preset) {
@@ -33,7 +39,7 @@ export const filterCommand = {
                     player.setData("hifi_active", true);
                     player.setData("eq_preset", "💎 Hi-Fi Studio");
                     await player.filterManager.setEQ(EQ_PRESETS.hifi);
-                    replyText = "💎 **Hi-Fi Studio Applied!** Enhanced dynamics and crystal sparkle.";
+                    replyText = "💎 **Hi-Fi Studio Applied!** Audiophile dynamics, crystal clarity, and zero clipping.";
                     break;
                 case "bassboost":
                     player.setData("hifi_active", false);
@@ -76,12 +82,6 @@ export const filterCommand = {
                     player.setData("eq_preset", "🎤 Karaoke");
                     await player.filterManager.toggleKaraoke(1, 1, 220, 100);
                     replyText = "🎤 **Karaoke Mode Active!** Center lead vocals dampened for sing-along.";
-                    break;
-                case "reset":
-                default:
-                    player.setData("hifi_active", false);
-                    player.setData("eq_preset", "Normal (Flat)");
-                    replyText = "🔄 **Equalizer Reset!** Streaming flat, pure master audio.";
                     break;
             }
             await updateActivePlayerMessage(player);
