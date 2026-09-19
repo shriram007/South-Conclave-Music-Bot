@@ -64,20 +64,20 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
   const vcMention = player.voiceChannelId ? `<#${player.voiceChannelId}>` : "Voice Channel";
   const radioNotice = hasAutoplayBuffered && queueCount === 0 ? " · 📻 Radio Next" : "";
 
-  // FlaviBot Accent: #5865F2 (Royal Blurple)
   const embed = new EmbedBuilder()
-    .setColor(0x5865f2)
+    .setColor(source.color || 0x5865f2)
     .setDescription(
       `### Now playing\n` +
       `---\n` +
       `## [${safeTitle}](${current.info.uri || "https://discord.com"})\n` +
       `• **Added by** ${requesterDisplay}\n` +
-      `• **Voice Channel:** ${vcMention}\n\n` +
+      `• **Voice Channel:** ${vcMention}\n` +
+      `• **Audio Fidelity:** ${source.badge}\n\n` +
       `Queue Size: \`${queueCount}\`${radioNotice} · Volume: \`${volume}%\` · Loop: \`${loopModeDisplay}\`\n\n` +
       `${progressBar}`
     )
     .setFooter({
-      text: `South Conclave Audiophile Engine • Fidelity: ${source.name}`,
+      text: `South Conclave Audiophile Engine • ${source.quality}`,
       ...(botAvatar ? { iconURL: botAvatar } : {}),
     })
     .setTimestamp();
