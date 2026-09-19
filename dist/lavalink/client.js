@@ -316,57 +316,98 @@ export function initLavalink(client) {
         if (!player.textChannelId)
             return;
         const channel = client.channels.cache.get(player.textChannelId);
-        // Smart Autoplay (Spotify Radio Mode)
+        // Smart Autoplay (YouTube Music / Spotify AI Algorithmic Radio)
         const isAutoplay = Boolean(player.getData("autoplay") ?? true);
         if (isAutoplay && player.queue.previous.length > 0) {
+            // If user queued a song while queueEnd was firing, prioritize the user's song immediately
+            if (player.queue.tracks.length > 0)
+                return;
             const lastTrack = player.queue.previous[0];
             const rawTitle = lastTrack.info.title || "";
             const rawAuthor = (lastTrack.info.author || "").replace(/- Topic/gi, "").trim();
             const cleanTitle = rawTitle.replace(/\|.*/, "").replace(/\[.*?\]/g, "").replace(/\(.*?\)/g, "").trim();
-            console.log(`[Smart Autoplay] Queue ended. Finding fresh recommendation based on "${cleanTitle}" by "${rawAuthor}"...`);
-            const serenetia = lavalink.nodeManager.nodes.get("Serenetia-HighSpeed");
-            const targetNode = serenetia?.connected
-                ? serenetia
-                : (player.node?.connected
-                    ? player.node
-                    : Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected) || player.node);
+            const videoId = lastTrack.info.identifier;
+            console.log(`[Smart Autoplay] Queue ended. Finding AI radio recommendations based on "${cleanTitle}" by "${rawAuthor}"...`);
+            // Try healthy nodes with priority on Millo and Serenetia
+            const connectedNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected);
+            const milloNode = connectedNodes.find((n) => n.id === "Millo-BackupNode");
+            const serenetiaNode = connectedNodes.find((n) => n.id === "Serenetia-HighSpeed");
+            const otherNodes = connectedNodes.filter((n) => n.id !== "Millo-BackupNode" && n.id !== "Serenetia-HighSpeed");
+            const nodesToTry = [
+                ...(milloNode ? [milloNode] : []),
+                ...(serenetiaNode ? [serenetiaNode] : []),
+                ...otherNodes,
+            ];
             const historyIds = new Set(player.queue.previous.map((t) => t.info.identifier));
-            // Try queries that return OTHER songs by the artist or similar artists (not the same song)
-            const queriesToTry = [];
-            if (rawAuthor && rawAuthor.length > 1 && !rawAuthor.toLowerCase().includes("various")) {
-                queriesToTry.push(`${rawAuthor} radio`);
-                queriesToTry.push(`songs similar to ${rawAuthor}`);
-                queriesToTry.push(`${rawAuthor} top tracks`);
-            }
-            queriesToTry.push(`songs like ${cleanTitle}`);
             let foundTrack = null;
-            for (const query of queriesToTry) {
-                try {
-                    const recRes = await targetNode.search({ query, source: "ytmsearch" }, lastTrack.requester);
-                    if (recRes?.tracks?.length && recRes.loadType !== "empty" && recRes.loadType !== "error") {
-                        const candidate = recRes.tracks.find((t) => !historyIds.has(t.info.identifier) &&
-                            !restrictedTrackIds.has(t.info.identifier) &&
-                            !isSameSongOrJunk(t.info.title, player.queue.previous) &&
-                            (t.info.duration || 0) >= 60000 &&
-                            (t.info.duration || 0) <= 900000);
-                        if (candidate) {
-                            foundTrack = candidate;
-                            console.log(`[Smart Autoplay] Found fresh song: "${candidate.info.title}" by "${candidate.info.author}" via "${query}"`);
-                            break;
+            // Strategy 1: YouTube Music Native Algorithmic Radio Mix (25 AI-curated related tracks)
+            if (videoId && /^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+                const radioUrl = `https://www.youtube.com/watch?v=${videoId}&list=RD${videoId}`;
+                for (const node of nodesToTry) {
+                    try {
+                        const radioRes = await node.search({ query: radioUrl }, lastTrack.requester);
+                        if (radioRes?.tracks?.length && radioRes.loadType !== "error" && radioRes.loadType !== "empty") {
+                            const candidate = radioRes.tracks.find((t) => !historyIds.has(t.info.identifier) &&
+                                !restrictedTrackIds.has(t.info.identifier) &&
+                                !isSameSongOrJunk(t.info.title, player.queue.previous) &&
+                                (t.info.duration || 0) >= 60000 &&
+                                (t.info.duration || 0) <= 900000);
+                            if (candidate) {
+                                foundTrack = candidate;
+                                console.log(`[Smart Autoplay] Found algorithmic radio match: "${candidate.info.title}" by "${candidate.info.author}" on node "${node.id}"`);
+                                break;
+                            }
+                        }
+                    }
+                    catch (e) {
+                        console.warn(`[Smart Autoplay] RD Radio lookup on node "${node.id}" failed:`, e?.message || e);
+                    }
+                }
+            }
+            // Strategy 2: Curated artist hits & similar song search across nodes if RD playlist did not match
+            if (!foundTrack) {
+                const queriesToTry = [];
+                if (rawAuthor && rawAuthor.length > 1 && !rawAuthor.toLowerCase().includes("various")) {
+                    queriesToTry.push(`${rawAuthor} top tracks`);
+                    queriesToTry.push(`${rawAuthor} hits`);
+                    queriesToTry.push(`songs similar to ${rawAuthor}`);
+                }
+                queriesToTry.push(`${cleanTitle} similar songs`);
+                for (const query of queriesToTry) {
+                    if (foundTrack)
+                        break;
+                    for (const node of nodesToTry) {
+                        try {
+                            const recRes = await node.search({ query, source: "ytmsearch" }, lastTrack.requester);
+                            if (recRes?.tracks?.length && recRes.loadType !== "empty" && recRes.loadType !== "error") {
+                                const candidate = recRes.tracks.find((t) => !historyIds.has(t.info.identifier) &&
+                                    !restrictedTrackIds.has(t.info.identifier) &&
+                                    !isSameSongOrJunk(t.info.title, player.queue.previous) &&
+                                    (t.info.duration || 0) >= 60000 &&
+                                    (t.info.duration || 0) <= 900000);
+                                if (candidate) {
+                                    foundTrack = candidate;
+                                    console.log(`[Smart Autoplay] Found fallback track: "${candidate.info.title}" by "${candidate.info.author}" via "${query}" on node "${node.id}"`);
+                                    break;
+                                }
+                            }
+                        }
+                        catch (e) {
+                            console.warn(`[Smart Autoplay] Search failed on "${node.id}" for query "${query}":`, e?.message || e);
                         }
                     }
                 }
-                catch (e) {
-                    console.warn(`[Smart Autoplay] Search failed for query "${query}":`, e);
-                }
             }
+            // Guard: if user added a song with /play while searching, let the user's song play!
+            if (player.queue.tracks.length > 0)
+                return;
             if (foundTrack) {
-                foundTrack.requester = lastTrack.requester;
+                foundTrack.requester = { displayName: "📻 Autoplay Radio" };
                 await player.queue.add(foundTrack);
                 await player.play();
                 if (channel) {
                     channel.send({
-                        content: `📻 **Autoplay Radio:** Playing similar song **[${foundTrack.info.title}](${foundTrack.info.uri})** by **${foundTrack.info.author}**`,
+                        content: `📻 **Autoplay Radio:** Playing **[${foundTrack.info.title}](${foundTrack.info.uri})** by **${foundTrack.info.author}**`,
                     }).then((msg) => autoDeleteMessage(msg, 7000)).catch(() => { });
                 }
                 return;

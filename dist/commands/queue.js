@@ -38,7 +38,13 @@ export const queueCommand = {
                 `**Up Next:**`);
         }
         if (pageTracks.length === 0) {
-            embed.addFields([{ name: "Queue", value: "No more tracks in queue. Add more using `/play`!" }]);
+            const isAutoplay = Boolean(player.getData("autoplay") ?? true);
+            embed.addFields([{
+                    name: "Queue",
+                    value: isAutoplay
+                        ? "📻 **Autoplay Radio Active:** The queue is clear, but similar songs will keep streaming automatically!\n💡 *Add songs anytime using `/play <song>` and they will play next with top priority.*"
+                        : "No more tracks in queue. Add more using `/play`!"
+                }]);
         }
         else {
             let list = pageTracks
