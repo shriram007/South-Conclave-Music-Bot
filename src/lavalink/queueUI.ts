@@ -103,19 +103,19 @@ export function buildQueueMessage(
         .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
         .setCustomId(`qm_moveup_${safePage}_${safeSelected}`)
-        .setEmoji("⬆️")
+        .setEmoji("🔼")
         .setLabel("+1")
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(absoluteSelectedIdx === 0),
       new ButtonBuilder()
         .setCustomId(`qm_top_${safePage}_${safeSelected}`)
-        .setEmoji("🔝")
+        .setEmoji("⏫")
         .setLabel("Top")
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(absoluteSelectedIdx === 0),
       new ButtonBuilder()
         .setCustomId(`qm_movedown_${safePage}_${safeSelected}`)
-        .setEmoji("⬇️")
+        .setEmoji("🔽")
         .setLabel("-1")
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(absoluteSelectedIdx === userTracks.length - 1),
@@ -163,7 +163,7 @@ export function buildQueueMessage(
     new ButtonBuilder()
       .setCustomId("qm_close")
       .setLabel("Close")
-      .setEmoji("✖️")
+      .setEmoji("❌")
       .setStyle(ButtonStyle.Danger)
   );
   components.push(rowNav);
