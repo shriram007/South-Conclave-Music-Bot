@@ -400,7 +400,7 @@ export function initLavalink(client: Client) {
           try {
             const radioRes = await node.search({ query: radioUrl }, lastTrack.requester);
             if (radioRes?.tracks?.length && radioRes.loadType !== "error" && radioRes.loadType !== "empty") {
-              const candidate = radioRes.tracks.find(
+              const validCandidates = radioRes.tracks.filter(
                 (t) =>
                   !historyIds.has(t.info.identifier) &&
                   !restrictedTrackIds.has(t.info.identifier) &&
@@ -408,10 +408,43 @@ export function initLavalink(client: Client) {
                   (t.info.duration || 0) >= 60000 &&
                   (t.info.duration || 0) <= 900000
               );
-              if (candidate) {
-                foundTrack = candidate;
-                console.log(`[Smart Autoplay] Found algorithmic radio match: "${candidate.info.title}" by "${candidate.info.author}" on node "${node.id}"`);
-                break;
+
+              if (validCandidates.length > 0) {
+                // Check if the current artist was already played in the last 2 tracks
+                const recentAuthors = player.queue.previous.slice(0, 2).map((t) => (t.info?.author || "").toLowerCase());
+                const cleanCurrentAuthor = rawAuthor.toLowerCase();
+                const isRecentSameArtist = recentAuthors.some((a) => a && (a.includes(cleanCurrentAuthor) || cleanCurrentAuthor.includes(a)));
+
+                // Separate candidates into other artists (same genre/mood) vs same artist
+                const otherArtistCandidates = validCandidates.filter((t) => {
+                  const tAuthor = (t.info?.author || "").toLowerCase();
+                  return !tAuthor.includes(cleanCurrentAuthor) && !cleanCurrentAuthor.includes(tAuthor);
+                });
+
+                const sameArtistCandidates = validCandidates.filter((t) => {
+                  const tAuthor = (t.info?.author || "").toLowerCase();
+                  return tAuthor.includes(cleanCurrentAuthor) || cleanCurrentAuthor.includes(tAuthor);
+                });
+
+                // Selection policy:
+                // 1. If recent track was already by the same artist, give 100% priority to a DIFFERENT artist in the same genre
+                // 2. Otherwise, give a 65% chance to explore other artists in the genre, and 35% chance for a same-artist track
+                let candidate: Track | undefined;
+                if (isRecentSameArtist && otherArtistCandidates.length > 0) {
+                  candidate = otherArtistCandidates[0];
+                  console.log(`[Smart Autoplay] Diversifying: Selected related artist "${candidate.info.author}" to balance "${rawAuthor}"`);
+                } else if (otherArtistCandidates.length > 0 && Math.random() < 0.65) {
+                  candidate = otherArtistCandidates[Math.floor(Math.random() * Math.min(3, otherArtistCandidates.length))];
+                  console.log(`[Smart Autoplay] Genre match from related artist "${candidate.info.author}"`);
+                } else {
+                  candidate = sameArtistCandidates[0] || otherArtistCandidates[0] || validCandidates[0];
+                }
+
+                if (candidate) {
+                  foundTrack = candidate;
+                  console.log(`[Smart Autoplay] Selected algorithmic radio track: "${candidate.info.title}" by "${candidate.info.author}" on node "${node.id}"`);
+                  break;
+                }
               }
             }
           } catch (e: any) {
@@ -423,12 +456,13 @@ export function initLavalink(client: Client) {
       // Strategy 2: Curated artist hits & similar song search across nodes if RD playlist did not match
       if (!foundTrack) {
         const queriesToTry: string[] = [];
+        queriesToTry.push(`${cleanTitle} similar songs`);
+        queriesToTry.push(`${rawAuthor} similar artists`);
+        queriesToTry.push(`${cleanTitle} mix`);
         if (rawAuthor && rawAuthor.length > 1 && !rawAuthor.toLowerCase().includes("various")) {
           queriesToTry.push(`${rawAuthor} top tracks`);
           queriesToTry.push(`${rawAuthor} hits`);
-          queriesToTry.push(`songs similar to ${rawAuthor}`);
         }
-        queriesToTry.push(`${cleanTitle} similar songs`);
 
         for (const query of queriesToTry) {
           if (foundTrack) break;
