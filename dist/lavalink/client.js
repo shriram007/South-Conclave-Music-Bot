@@ -150,6 +150,28 @@ export async function findAutoplayRecommendation(player, seedTrack) {
             historyIds.add(t.info.identifier);
     }
     let foundCandidate = null;
+    // Strategy 0: High-fidelity JioSaavn Regional Radio for Indian languages
+    if (["tamil", "telugu", "malayalam", "hindi"].includes(seedLang)) {
+        try {
+            const jioAuto = await findJioSaavnAutoplay(cleanTitle, rawAuthor, seedLang, historyIds);
+            if (jioAuto) {
+                const candidateNodes = [
+                    player.node,
+                    ...(kasawaNode ? [kasawaNode] : []),
+                    ...nodesToTry,
+                ];
+                const converted = await loadJioSaavnAsLavalinkTrack(jioAuto, { displayName: "📻 Autoplay Radio" }, candidateNodes);
+                if (converted) {
+                    console.log(`[Smart Autoplay] Found regional JioSaavn recommendation (${seedLang}): "${converted.track.info.title}" by "${converted.track.info.author}"`);
+                    converted.track.requester = { displayName: "📻 Autoplay Radio" };
+                    return converted.track;
+                }
+            }
+        }
+        catch (e) {
+            console.warn("[Smart Autoplay] JioSaavn discovery notice:", e);
+        }
+    }
     // Strategy 1: YouTube Music Native Algorithmic Radio Mix (25 AI-curated related tracks via RD<videoId>)
     if (videoId && /^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
         const radioUrl = `https://www.youtube.com/watch?v=${videoId}&list=RD${videoId}`;
@@ -295,6 +317,8 @@ export async function findAutoplayRecommendation(player, seedTrack) {
 export async function prefetchAutoplayTrack(player) {
     const isAutoplay = Boolean(player.getData("autoplay") ?? true);
     if (!isAutoplay)
+        return;
+    if (player.getData("recovering_track"))
         return;
     // STRICT USER PRIORITY: If there are ANY user-queued tracks, do not prefetch autoplay!
     const userTracks = player.queue.tracks.filter((t) => {
@@ -525,27 +549,6 @@ export function initLavalink(client) {
                         }
                     }
                 }
-                // ── Frame Deficit Watchdog ───────────────────────────────────────────
-                // If the current node has high frame deficit (> 200), it means it's
-                // overloaded and audio is about to speed-up/glitch. Silently migrate
-                // to the best alternative node NOW before it becomes audible.
-                const nodeStats = player.node?.stats;
-                const currentDeficit = nodeStats?.frameStats?.deficit ?? 0;
-                const DEFICIT_MIGRATE_THRESHOLD = 200;
-                if (currentDeficit > DEFICIT_MIGRATE_THRESHOLD && !player.getData("deficit_migrating")) {
-                    const bestNodeId = getBestNode();
-                    if (bestNodeId && bestNodeId !== player.node?.id) {
-                        const bestNode = lavalink.nodeManager.nodes.get(bestNodeId);
-                        if (bestNode?.connected) {
-                            player.setData("deficit_migrating", true);
-                            console.warn(`[Frame Watchdog] Node "${player.node?.id}" has ${currentDeficit} deficit frames. Migrating to "${bestNodeId}" to prevent audio glitch...`);
-                            player.changeNode(bestNode, false)
-                                .catch(() => { })
-                                .finally(() => setTimeout(() => player.setData("deficit_migrating", false), 30000));
-                        }
-                    }
-                }
-                // ─────────────────────────────────────────────────────────────────────
                 await updateActivePlayerMessage(player);
             }
             catch (err) {
@@ -586,25 +589,6 @@ export function initLavalink(client) {
         }
         trackStartLocks.add(player.guildId);
         try {
-            // ── Silent node upgrade between tracks (non-blocking) ──────────────────
-            // Migrate to the best node in the background — doesn't delay song start.
-            // The NEXT track after this one will benefit if migration takes time.
-            (async () => {
-                try {
-                    const currentNodeId = player.node?.id;
-                    const bestNodeId = getBestNode();
-                    const currentIsHealthy = currentNodeId ? isNodeHealthy(currentNodeId) : false;
-                    if (bestNodeId && bestNodeId !== currentNodeId && (!currentIsHealthy || currentNodeId === "Millo-BackupNode")) {
-                        const bestNode = lavalink.nodeManager.nodes.get(bestNodeId);
-                        if (bestNode?.connected) {
-                            console.log(`[Node Upgrade] Silently moving player from "${currentNodeId}" → "${bestNodeId}" for best quality.`);
-                            await player.changeNode(bestNode, false).catch(() => { });
-                        }
-                    }
-                }
-                catch { /* non-fatal */ }
-            })();
-            // ────────────────────────────────────────────────────────────────────────
             const prevMessageId = activePlayerMessages.get(player.guildId) || player.getData("active_message_id");
             const activeTrackUri = player.getData("active_track_uri");
             // If the exact same track is already playing and has an active message, just update it in place
@@ -990,14 +974,22 @@ export function initLavalink(client) {
                     // If the recovery track was found on another node, migrate player
                     if (player.node.id !== targetNode.id) {
                         console.log(`[Universal Recovery] Migrating player from ${player.node.id} to ${targetNode.id}...`);
-                        await player.changeNode(targetNode, false).catch((err) => {
-                            console.warn("[Universal Recovery] changeNode error:", err);
-                        });
+                        try {
+                            await player.changeNode(targetNode, false);
+                        }
+                        catch (err) {
+                            console.warn("[Universal Recovery] changeNode error:", err?.message || err);
+                        }
                     }
                     recoveredTrack.requester = track.requester;
                     if (track.info.artworkUrl)
                         recoveredTrack.info.artworkUrl = track.info.artworkUrl;
-                    await player.play({ clientTrack: recoveredTrack, noReplace: false });
+                    try {
+                        await player.play({ clientTrack: recoveredTrack, noReplace: false });
+                    }
+                    catch (playErr) {
+                        console.warn("[Universal Recovery] play error:", playErr?.message || playErr);
+                    }
                     if (player.textChannelId) {
                         const channel = client.channels.cache.get(player.textChannelId);
                         const isJio = Boolean(recoveredTrack.userData?.isJioSaavn);
@@ -1056,13 +1048,13 @@ export function getBestNode() {
         const playing = stats?.playingPlayers ?? 0;
         const cpu = stats?.cpu?.lavalinkLoad ?? 0;
         // Priority bonus (lower = preferred when load is equal)
-        let priorityBonus = 20;
+        let priorityBonus = 50;
         if (node.id === "Kasawa-MasterNode")
-            priorityBonus = 0;
+            priorityBonus = -500; // Primary master node (direct HTTP 320k JioSaavn + YT/SoundCloud)
         if (node.id === "Serenetia-AuxNode")
             priorityBonus = 10;
         if (node.id === "Millo-BackupNode")
-            priorityBonus = 20;
+            priorityBonus = 50;
         const score = (deficit * FRAME_DEFICIT_WEIGHT) +
             (playing * PLAYER_COUNT_WEIGHT) +
             (cpu * CPU_WEIGHT) +
