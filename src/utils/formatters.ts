@@ -346,7 +346,7 @@ export function detectTrackLanguage(title: string, author: string = ""): MusicLa
 
   // 4. Prominent Artists, Composers, and Movie Keywords
   // Tamil
-  if (/\b(anirudh|yuvan|ilayaraja|ilayaraaja|harris jayaraj|santhosh narayanan|sa-na|dhanush|vijay sethupathi|trisha|govind vasantha|sid sriram|u1|spb|karthik|chinmayi|naresh iyer|gv prakash|g\.v\. prakash|d imman|vijay|ajith|suriya|rajinikanth|kamal haasan|vignesh shivan|sean roldan|pradeep kumar|dhee|haricharan|shweta mohan|vijay antony|deva|vidyasagar|stephen zechariah|keba jeremiah|ar rahman|a\.r\. rahman|a\.r\.rahman|rahman|roja|bombay|kandukondain|alaipayuthey|uzhavan|vinnaithaandi|mudhalvan|sivaji|gentleman|kadhal|kadhale|kaathalae|kanne|kannamma|vaathi|mersal|leo|jailer|master|vikram|kaaviyathalaivan|aarambam|asuran|karnan|raayan|goat|anbe shivam|jeans|vinnai|munbe|vaarayo|idhazhin|mazhai|yennai|konjam|sol|en kadhal|yen kadhal|thalli pogathey|neethanae|nenjukulle|kannaana|rowdy baby|chellamma|naanum rowdy|hariharan|bombay jayashri|unnikrishnan|p\.?\s*unnikrishnan|harish raghavendra|tippu|shankar mahadevan|swarnalatha|mano|sujatha|sadhana sargam|hiphop tamizha|hip hop tamizha|sam cs|ghibran|justin prabhakaran|nivas k prasanna|leon james|vivek-mervin|jonita gandhi|nakash aziz|andrea|saindhavi|anuradha sriram|manjal|veyil|vettaiyaadu|vaaranam aayiram|minnale|kaakha kaakha|ghajini|sachein|ghilli|pokkiri|thuppakki|kaththi|theri|billa|mankatha|dheena|run|pudhupettai|kushi|autograph|partha mudhal|azhagiya theeye|mudhal kanave)\b/i.test(text)) {
+  if (/\b(anirudh|yuvan|ilayaraja|ilayaraaja|harris jayaraj|santhosh narayanan|sa-na|dhanush|vijay sethupathi|trisha|govind vasantha|sid sriram|u1|spb|karthik|chinmayi|naresh iyer|gv prakash|g\.v\. prakash|d imman|vijay|ajith|suriya|rajinikanth|kamal haasan|vignesh shivan|sean roldan|pradeep kumar|dhee|haricharan|shweta mohan|vijay antony|deva|vidyasagar|stephen zechariah|keba jeremiah|ar rahman|a\.r\. rahman|a\.r\.rahman|rahman|roja|bombay|kandukondain|alaipayuthey|uzhavan|vinnaithaandi|mudhalvan|sivaji|gentleman|kadhal|kadhale|kaathalae|kanne|kannamma|vaathi|mersal|leo|jailer|master|vikram|kaaviyathalaivan|aarambam|asuran|karnan|raayan|goat|anbe shivam|jeans|vinnai|munbe|vaarayo|idhazhin|mazhai|yennai|konjam|kadhal|sol|en kadhal|yen kadhal|thalli pogathey|neethanae|nenjukulle|kannaana|rowdy baby|chellamma|naanum rowdy)\b/i.test(text)) {
     return "tamil";
   }
 
@@ -406,31 +406,6 @@ export function isLanguageCompatible(seedLang: MusicLanguage, candidateLang: Mus
   if ((isSouthIndian(seedLang) || isNorthIndian(seedLang)) && candidateLang === "english") return false;
 
   return false;
-}
-
-/**
- * Checks era and vibe consistency between songs to avoid jarring generational jumps
- * (e.g., from modern 2000s/2010s/2020s hits into 1960s/1970s vintage retro songs).
- */
-export function isEraCompatible(seedTitle: string, seedAuthor: string, candidateTitle: string, candidateAuthor: string): boolean {
-  const seedText = `${seedTitle} ${seedAuthor}`.toLowerCase();
-  const candText = `${candidateTitle} ${candidateAuthor}`.toLowerCase();
-
-  const vintageRegex = /\b(t\.?m\.?s|soundararajan|p\.?\s*susheela|m\.?s\.?\s*viswanathan|msv|sirkazhi|seerkazhi|k\.?v\.?\s*mahadevan|kannadasan|puratchi thalaivar|nadigar thilagam|old is gold|golden hits 70s|golden hits 60s|vintage hits|50s hits|60s hits|70s hits|black and white|classical carnat(ic|aka))\b/i;
-
-  const modernRegex = /\b(anirudh|harris jayaraj|yuvan|santhosh narayanan|hiphop tamizha|sid sriram|gv prakash|g\.v\. prakash|sean roldan|pradeep kumar|dhee|haricharan|jonita|manjal veyil|vaathi|leo|jailer|master|vikram|raayan|goat|vettaiyaadu|vaaranam aayiram|minnale|ghajini|pokkiri|thuppakki|kaththi|theri|mersal)\b/i;
-
-  const seedIsModern = modernRegex.test(seedText);
-  const candIsVintage = vintageRegex.test(candText);
-
-  // If playing a modern track, strictly reject vintage 60s/70s retro tracks
-  if (seedIsModern && candIsVintage) return false;
-
-  const seedIsVintage = vintageRegex.test(seedText);
-  // If user intentionally queued a vintage retro classic, don't jump to modern EDM/trap
-  if (seedIsVintage && seedIsModern) return true;
-
-  return true;
 }
 
 

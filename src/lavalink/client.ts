@@ -14,7 +14,7 @@ import { LavalinkManager, LavalinkNodeOptions, Player, Track } from "lavalink-cl
 import { config } from "../config.js";
 import { buildPlayerMessage } from "./playerUI.js";
 import { autoDeleteMessage } from "../utils/cleanup.js";
-import { detectTrackLanguage, getChannelBitrateInfo, isEraCompatible, isLanguageCompatible, isRelevantTrack } from "../utils/formatters.js";
+import { detectTrackLanguage, getChannelBitrateInfo, isLanguageCompatible, isRelevantTrack } from "../utils/formatters.js";
 import { is247Enabled } from "../utils/twentyFourSeven.js";
 import { clearGuildSession, saveActiveSessions } from "../utils/sessionRecovery.js";
 import { applyLoudnessNormalization } from "../commands/normalize.js";
@@ -188,8 +188,7 @@ export async function findAutoplayRecommendation(player: Player, seedTrack: Trac
               !isSameSongOrJunk(t.info.title, [...player.queue.previous, ...(player.queue.current ? [player.queue.current] : [])]) &&
               (t.info.duration || 0) >= 60000 &&
               (t.info.duration || 0) <= 900000 &&
-              isLanguageCompatible(seedLang, detectTrackLanguage(t.info.title, t.info.author || "")) &&
-              isEraCompatible(rawTitle, rawAuthor, t.info.title, t.info.author || "")
+              isLanguageCompatible(seedLang, detectTrackLanguage(t.info.title, t.info.author || ""))
           );
 
           if (validCandidates.length > 0) {
@@ -268,8 +267,7 @@ export async function findAutoplayRecommendation(player: Player, seedTrack: Trac
                 !isSameSongOrJunk(t.info.title, [...player.queue.previous, ...(player.queue.current ? [player.queue.current] : [])]) &&
                 (t.info.duration || 0) >= 60000 &&
                 (t.info.duration || 0) <= 900000 &&
-                isLanguageCompatible(seedLang, detectTrackLanguage(t.info.title, t.info.author || "")) &&
-                isEraCompatible(rawTitle, rawAuthor, t.info.title, t.info.author || "")
+                isLanguageCompatible(seedLang, detectTrackLanguage(t.info.title, t.info.author || ""))
             );
             if (candidate) {
               foundCandidate = candidate;
