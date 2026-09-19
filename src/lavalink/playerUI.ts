@@ -54,9 +54,15 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
 
   const botAvatar = discordClient?.user?.displayAvatarURL({ extension: "png", size: 128 });
 
-  const queueCount = player.queue.tracks.length;
+  const userTracks = player.queue.tracks.filter((t) => {
+    const isAutoplay = (t.requester as any)?.displayName === "📻 Autoplay Radio" || (t.requester as any)?.username === "Autoplay Radio" || (t.userData as any)?.isAutoplay;
+    return !isAutoplay;
+  });
+  const queueCount = userTracks.length;
+  const hasAutoplayBuffered = player.queue.tracks.length > userTracks.length;
   const safeTitle = current.info.title.substring(0, 200).replace(/\[/g, "\\[").replace(/\]/g, "\\]");
   const vcMention = player.voiceChannelId ? `<#${player.voiceChannelId}>` : "Voice Channel";
+  const radioNotice = hasAutoplayBuffered && queueCount === 0 ? " · 📻 Radio Next" : "";
 
   // FlaviBot Accent: #5865F2 (Royal Blurple)
   const embed = new EmbedBuilder()
@@ -67,7 +73,7 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
       `## [${safeTitle}](${current.info.uri || "https://discord.com"})\n` +
       `• **Added by** ${requesterDisplay}\n` +
       `• **Voice Channel:** ${vcMention}\n\n` +
-      `Queue Size: \`${queueCount}\` · Volume: \`${volume}%\` · Loop: \`${loopModeDisplay}\`\n\n` +
+      `Queue Size: \`${queueCount}\`${radioNotice} · Volume: \`${volume}%\` · Loop: \`${loopModeDisplay}\`\n\n` +
       `${progressBar}`
     )
     .setFooter({

@@ -1006,6 +1006,22 @@ export async function getOrCreatePlayer(interaction: ChatInputCommandInteraction
     console.log(`[Player] Connecting to voice channel ${voiceChannel.name}...`);
     await player.connect();
     console.log(`[Player] Connected to voice channel ${voiceChannel.name}!`);
+
+    // Auto-maximize Voice Channel Bitrate up to server limit (up to 384 kbps)
+    try {
+      const tier = voiceChannel.guild.premiumTier;
+      let maxBitrate = 96000;
+      if (tier === 1) maxBitrate = 128000;
+      if (tier === 2) maxBitrate = 256000;
+      if (tier === 3) maxBitrate = 384000;
+      if (voiceChannel.bitrate < maxBitrate) {
+        const botMember = voiceChannel.guild.members.me;
+        if (botMember?.permissions.has("ManageChannels")) {
+          await voiceChannel.setBitrate(maxBitrate, "South Conclave Audiophile Auto-Optimization").catch(() => {});
+          console.log(`[Audio Quality] Auto-maximized voice channel "${voiceChannel.name}" to ${Math.round(maxBitrate / 1000)} kbps (Tier ${tier} Peak)!`);
+        }
+      }
+    } catch {}
   }
 
   return { player };

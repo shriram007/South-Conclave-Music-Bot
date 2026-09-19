@@ -25,16 +25,19 @@ export function buildQueueMessage(
   selectedIndex: number = 0,
   initiatorName?: string
 ): QueueMessagePayload {
-  const tracks = player.queue.tracks;
+  const userTracks = player.queue.tracks.filter((t) => {
+    const isAutoplay = (t.requester as any)?.displayName === "📻 Autoplay Radio" || (t.requester as any)?.username === "Autoplay Radio" || (t.userData as any)?.isAutoplay;
+    return !isAutoplay;
+  });
   const current = player.queue.current;
   const pageSize = 5;
-  const totalPages = Math.max(1, Math.ceil(tracks.length / pageSize));
+  const totalPages = Math.max(1, Math.ceil(userTracks.length / pageSize));
   const safePage = Math.max(0, Math.min(page, totalPages - 1));
 
   // Compute total duration of remaining queue
-  const totalMs = tracks.reduce((acc, t) => acc + (t.info.duration || 0), 0);
+  const totalMs = userTracks.reduce((acc, t) => acc + (t.info.duration || 0), 0);
   const startIdx = safePage * pageSize;
-  const pageTracks = tracks.slice(startIdx, startIdx + pageSize);
+  const pageTracks = userTracks.slice(startIdx, startIdx + pageSize);
 
   // Ensure selectedIndex is within valid range for current page
   const safeSelected = Math.max(0, Math.min(selectedIndex, Math.max(0, pageTracks.length - 1)));
@@ -42,7 +45,11 @@ export function buildQueueMessage(
 
   const embed = new EmbedBuilder()
     .setColor(0x5865f2)
-    .setTitle(`(${tracks.length}) songs in queue for ${formatDuration(totalMs)}`);
+    .setTitle(
+      userTracks.length > 0
+        ? `(${userTracks.length}) songs in queue for ${formatDuration(totalMs)}`
+        : "Queue is empty"
+    );
 
   let desc = "";
 
@@ -52,9 +59,17 @@ export function buildQueueMessage(
 
   if (pageTracks.length === 0) {
     const isAutoplay = Boolean(player.getData("autoplay") ?? true);
-    desc += isAutoplay
-      ? "📻 **Autoplay Radio Active:** The queue is clear, but similar songs will stream automatically!\n💡 *Add songs anytime using `/play <song>`.*"
-      : "ℹ️ Queue is currently empty. Use `/play` to add tracks!";
+    const bufferedAutoplay = player.queue.tracks.find((t) => {
+      return (t.requester as any)?.displayName === "📻 Autoplay Radio" || (t.requester as any)?.username === "Autoplay Radio" || (t.userData as any)?.isAutoplay;
+    });
+
+    if (bufferedAutoplay) {
+      desc += `📻 **Autoplay Radio (Playing Next):**\n🎶 [${bufferedAutoplay.info.title}](${bufferedAutoplay.info.uri || ""}) • \`${formatDuration(bufferedAutoplay.info.duration || 0)}\`\n*by ${bufferedAutoplay.info.author}*\n\n💡 *Add songs anytime using \`/play <song>\`.*`;
+    } else if (isAutoplay) {
+      desc += "📻 **Autoplay Radio Active:** The queue is clear, but similar songs will stream automatically!\n💡 *Add songs anytime using `/play <song>`.*";
+    } else {
+      desc += "ℹ️ Queue is currently empty. Use `/play` to add tracks!";
+    }
   } else {
     pageTracks.forEach((t, i) => {
       const num = startIdx + i + 1;
@@ -73,7 +88,7 @@ export function buildQueueMessage(
 
   embed.setDescription(desc.trim());
   embed.setFooter({
-    text: `Page ${safePage + 1}/${totalPages} • ${tracks.length} songs • ${initiatorName ? `Initiated by @${initiatorName}` : "South Conclave Music"}`,
+    text: `Page ${safePage + 1}/${totalPages} • ${userTracks.length} songs • ${initiatorName ? `Initiated by @${initiatorName}` : "South Conclave Music"}`,
   });
 
   const components: ActionRowBuilder<any>[] = [];
@@ -88,22 +103,22 @@ export function buildQueueMessage(
         .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
         .setCustomId(`qm_moveup_${safePage}_${safeSelected}`)
-        .setEmoji("∧")
+        .setEmoji("⬆️")
         .setLabel("+1")
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(absoluteSelectedIdx === 0),
       new ButtonBuilder()
         .setCustomId(`qm_top_${safePage}_${safeSelected}`)
-        .setEmoji("⊼")
+        .setEmoji("🔝")
         .setLabel("Top")
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(absoluteSelectedIdx === 0),
       new ButtonBuilder()
         .setCustomId(`qm_movedown_${safePage}_${safeSelected}`)
-        .setEmoji("∨")
+        .setEmoji("⬇️")
         .setLabel("-1")
         .setStyle(ButtonStyle.Secondary)
-        .setDisabled(absoluteSelectedIdx === tracks.length - 1),
+        .setDisabled(absoluteSelectedIdx === userTracks.length - 1),
       new ButtonBuilder()
         .setCustomId(`qm_play_${safePage}_${safeSelected}`)
         .setEmoji("▶️")

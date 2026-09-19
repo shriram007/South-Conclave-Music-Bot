@@ -136,6 +136,7 @@ export async function smartSearch(player, query, isUrl, user) {
         }
         console.warn(`[SmartSearch] ${label} on "${node.id}" failed:`, errMsg);
     };
+    let fallbackCandidate = null;
     // 1. Try YouTube Music (ytmsearch) across connected healthy nodes
     for (const node of nodesToTry) {
         try {
@@ -143,9 +144,14 @@ export async function smartSearch(player, query, isUrl, user) {
             if (res?.tracks?.length && res.loadType !== "empty" && res.loadType !== "error") {
                 const viable = res.tracks.filter((t) => !restrictedTrackIds.has(t.info.identifier));
                 if (viable.length > 0) {
-                    syncPlayerNode(node);
-                    console.log(`[SmartSearch] Found "${viable[0].info.title}" via ytmsearch on node "${node.id}"`);
-                    return { ...res, tracks: viable };
+                    if (!fallbackCandidate)
+                        fallbackCandidate = { res, node, tracks: viable };
+                    const relevant = viable.filter((t) => isRelevantTrack(t.info.title, query) || isRelevantTrack(t.info.author, query));
+                    if (relevant.length > 0) {
+                        syncPlayerNode(node);
+                        console.log(`[SmartSearch] Found "${relevant[0].info.title}" via ytmsearch on node "${node.id}"`);
+                        return { ...res, tracks: relevant };
+                    }
                 }
             }
         }
@@ -158,11 +164,16 @@ export async function smartSearch(player, query, isUrl, user) {
         try {
             const res = await executeSearchWithTimeout(node, { query: `${query} audio`, source: "ytsearch" });
             if (res?.tracks?.length && res.loadType !== "empty" && res.loadType !== "error") {
-                const viable = res.tracks.filter((t) => !restrictedTrackIds.has(t.info.identifier) && isRelevantTrack(t.info.title, query));
+                const viable = res.tracks.filter((t) => !restrictedTrackIds.has(t.info.identifier));
                 if (viable.length > 0) {
-                    syncPlayerNode(node);
-                    console.log(`[SmartSearch] Found "${viable[0].info.title}" via ytsearch (audio) on node "${node.id}"`);
-                    return { ...res, tracks: viable };
+                    if (!fallbackCandidate)
+                        fallbackCandidate = { res, node, tracks: viable };
+                    const relevant = viable.filter((t) => isRelevantTrack(t.info.title, query));
+                    if (relevant.length > 0) {
+                        syncPlayerNode(node);
+                        console.log(`[SmartSearch] Found "${relevant[0].info.title}" via ytsearch (audio) on node "${node.id}"`);
+                        return { ...res, tracks: relevant };
+                    }
                 }
             }
         }
@@ -175,11 +186,16 @@ export async function smartSearch(player, query, isUrl, user) {
         try {
             const res = await executeSearchWithTimeout(node, { query, source: "scsearch" });
             if (res?.tracks?.length && res.loadType !== "empty" && res.loadType !== "error") {
-                const viable = res.tracks.filter((t) => !restrictedTrackIds.has(t.info.identifier) && isRelevantTrack(t.info.title, query));
+                const viable = res.tracks.filter((t) => !restrictedTrackIds.has(t.info.identifier));
                 if (viable.length > 0) {
-                    syncPlayerNode(node);
-                    console.log(`[SmartSearch] Found "${viable[0].info.title}" via scsearch on node "${node.id}"`);
-                    return { ...res, tracks: viable };
+                    if (!fallbackCandidate)
+                        fallbackCandidate = { res, node, tracks: viable };
+                    const relevant = viable.filter((t) => isRelevantTrack(t.info.title, query));
+                    if (relevant.length > 0) {
+                        syncPlayerNode(node);
+                        console.log(`[SmartSearch] Found "${relevant[0].info.title}" via scsearch on node "${node.id}"`);
+                        return { ...res, tracks: relevant };
+                    }
                 }
             }
         }
@@ -187,22 +203,11 @@ export async function smartSearch(player, query, isUrl, user) {
             handleSearchError(node, e, "scsearch");
         }
     }
-    // 4. Standard ytsearch fallback
-    for (const node of nodesToTry) {
-        try {
-            const res = await executeSearchWithTimeout(node, { query, source: "ytsearch" });
-            if (res?.tracks?.length && res.loadType !== "empty" && res.loadType !== "error") {
-                const viable = res.tracks.filter((t) => !restrictedTrackIds.has(t.info.identifier));
-                if (viable.length > 0) {
-                    syncPlayerNode(node);
-                    console.log(`[SmartSearch] Found "${viable[0].info.title}" via ytsearch on node "${node.id}"`);
-                    return { ...res, tracks: viable };
-                }
-            }
-        }
-        catch (e) {
-            handleSearchError(node, e, "ytsearch");
-        }
+    // 4. Return fallback candidate if no strict relevance match was found across engines
+    if (fallbackCandidate) {
+        syncPlayerNode(fallbackCandidate.node);
+        console.log(`[SmartSearch] Returning best candidate "${fallbackCandidate.tracks[0].info.title}" on node "${fallbackCandidate.node.id}"`);
+        return { ...fallbackCandidate.res, tracks: fallbackCandidate.tracks };
     }
     return null;
 }
