@@ -51,6 +51,38 @@ export function decryptMediaUrl(encryptedUrl: string): string | null {
 }
 
 /**
+ * Parses raw JioSaavn API track object into a clean JioSaavnTrack with 320 kbps stream URL
+ */
+export function parseJioSaavnSong(item: any): JioSaavnTrack | null {
+  if (!item) return null;
+  const encUrl = item?.more_info?.encrypted_media_url || item?.encrypted_media_url || item?.encrypted_drm_media_url;
+  const streamUrl = decryptMediaUrl(encUrl);
+  if (!streamUrl) return null;
+
+  const title = cleanText(item.song || item.title || "");
+  const artist = cleanText(item.singers || item.primary_artists || item.more_info?.singers || item.more_info?.artistMap?.primary_artists?.[0]?.name || item.music || "JioSaavn Artist");
+  const album = cleanText(item.album || item.more_info?.album || "");
+  const rawImage = item.image || item.more_info?.image || "";
+  const artworkUrl = rawImage ? rawImage.replace(/150x150\.jpg|50x50\.jpg/, "500x500.jpg") : "";
+  const duration = parseInt(item.duration || item.more_info?.duration || "0", 10);
+  const language = (item.language || "tamil").toLowerCase();
+
+  return {
+    id: item.id,
+    title,
+    artist,
+    album,
+    year: item.year || item.more_info?.year || "",
+    duration,
+    artworkUrl,
+    streamUrl,
+    language,
+    has320kbps: item["320kbps"] === "true" || item.more_info?.["320kbps"] === "true" || item["320kbps"] === true,
+    uri: item.perma_url || (item.id ? `https://www.jiosaavn.com/song/${encodeURIComponent(title)}/${item.id}` : ""),
+  };
+}
+
+/**
  * Search JioSaavn for tracks matching the query
  */
 export async function searchJioSaavn(query: string, limit: number = 5): Promise<JioSaavnTrack[]> {
@@ -83,31 +115,8 @@ export async function searchJioSaavn(query: string, limit: number = 5): Promise<
     const tracks: JioSaavnTrack[] = [];
 
     for (const item of rawResults) {
-      const encUrl = item?.more_info?.encrypted_media_url || item?.encrypted_media_url || item?.encrypted_drm_media_url;
-      const streamUrl = decryptMediaUrl(encUrl);
-      if (!streamUrl) continue;
-
-      const title = cleanText(item.song || item.title || "");
-      const artist = cleanText(item.singers || item.primary_artists || item.more_info?.singers || item.more_info?.artistMap?.primary_artists?.[0]?.name || item.music || "JioSaavn Artist");
-      const album = cleanText(item.album || item.more_info?.album || "");
-      const rawImage = item.image || item.more_info?.image || "";
-      const artworkUrl = rawImage ? rawImage.replace(/150x150\.jpg|50x50\.jpg/, "500x500.jpg") : "";
-      const duration = parseInt(item.duration || item.more_info?.duration || "0", 10);
-      const language = (item.language || "tamil").toLowerCase();
-
-      tracks.push({
-        id: item.id,
-        title,
-        artist,
-        album,
-        year: item.year || item.more_info?.year || "",
-        duration,
-        artworkUrl,
-        streamUrl,
-        language,
-        has320kbps: item["320kbps"] === "true" || item.more_info?.["320kbps"] === "true",
-        uri: item.perma_url || `https://www.jiosaavn.com/song/${encodeURIComponent(title)}/${item.id}`,
-      });
+      const track = parseJioSaavnSong(item);
+      if (track) tracks.push(track);
     }
 
     return tracks;
@@ -278,6 +287,110 @@ export async function findJioSaavnAutoplay(seedTitle: string, seedArtist: string
 }
 
 /**
+ * Checks whether a given string is a JioSaavn / Saavn URL
+ */
+export function isJioSaavnUrl(str: string): boolean {
+  if (!str) return false;
+  return /https?:\/\/(?:www\.|www5\.)?(?:jiosaavn\.com|saavn\.com|jio\.saavn\.com|saavn\.me|jioma\.in)\//i.test(str.trim());
+}
+
+export type JioSaavnResolved =
+  | { type: "track"; track: JioSaavnTrack }
+  | { type: "playlist"; title: string; tracks: JioSaavnTrack[] };
+
+/**
+ * Parses and resolves a JioSaavn song, album, or playlist URL into 320 kbps studio tracks
+ */
+export async function resolveJioSaavnUrl(url: string): Promise<JioSaavnResolved | null> {
+  if (!isJioSaavnUrl(url)) return null;
+
+  let finalUrl = url.trim();
+  try {
+    const head = await fetch(finalUrl, {
+      method: "GET",
+      redirect: "follow",
+      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" },
+      signal: AbortSignal.timeout(5000),
+    });
+    finalUrl = head.url || finalUrl;
+  } catch {}
+
+  try {
+    const parsed = new URL(finalUrl);
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    if (segments.length === 0) return null;
+
+    const isSong = segments.some((s) => s.toLowerCase() === "song");
+    const isAlbum = segments.some((s) => s.toLowerCase() === "album");
+    const isPlaylist = segments.some((s) => ["playlist", "featured"].includes(s.toLowerCase()));
+
+    const token = segments[segments.length - 1];
+    const slug = segments.length >= 2 ? segments[segments.length - 2] : "";
+
+    if (isSong) {
+      const apiUrl = `https://www.jiosaavn.com/api.php?__call=webapi.get&token=${encodeURIComponent(token)}&type=song&_format=json&_marker=0&cc=in&includeMetaTags=1`;
+      const res = await fetch(apiUrl, {
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (res.ok) {
+        const data: any = await res.json();
+        const firstVal = Object.values(data)[0];
+        if (firstVal) {
+          const track = parseJioSaavnSong(firstVal);
+          if (track) return { type: "track", track };
+        }
+      }
+
+      // Fallback: search using slug name if token failed
+      if (slug) {
+        const slugQuery = slug.replace(/-/g, " ").trim();
+        const fallback = await resolveJioSaavnTrack(slugQuery);
+        if (fallback) return { type: "track", track: fallback };
+      }
+    }
+
+    if (isAlbum) {
+      const apiUrl = `https://www.jiosaavn.com/api.php?__call=webapi.get&token=${encodeURIComponent(token)}&type=album&_format=json&_marker=0&cc=in`;
+      const res = await fetch(apiUrl, {
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" },
+        signal: AbortSignal.timeout(7000),
+      });
+      if (res.ok) {
+        const data: any = await res.json();
+        const rawSongs = data?.songs || data?.list || [];
+        const tracks = rawSongs.map(parseJioSaavnSong).filter((t: any): t is JioSaavnTrack => Boolean(t));
+        const title = cleanText(data?.title || data?.name || slug.replace(/-/g, " ") || "JioSaavn Album");
+        if (tracks.length > 0) {
+          return { type: "playlist", title, tracks };
+        }
+      }
+    }
+
+    if (isPlaylist) {
+      const apiUrl = `https://www.jiosaavn.com/api.php?__call=webapi.get&token=${encodeURIComponent(token)}&type=playlist&_format=json&_marker=0&cc=in`;
+      const res = await fetch(apiUrl, {
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" },
+        signal: AbortSignal.timeout(7000),
+      });
+      if (res.ok) {
+        const data: any = await res.json();
+        const rawSongs = data?.songs || data?.list || [];
+        const tracks = rawSongs.map(parseJioSaavnSong).filter((t: any): t is JioSaavnTrack => Boolean(t));
+        const title = cleanText(data?.title || data?.listname || slug.replace(/-/g, " ") || "JioSaavn Playlist");
+        if (tracks.length > 0) {
+          return { type: "playlist", title, tracks };
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("[JioSaavn] URL resolution notice:", err);
+  }
+
+  return null;
+}
+
+/**
  * Resolves a JioSaavnTrack into a playable Lavalink Track across candidate nodes
  */
 export async function loadJioSaavnAsLavalinkTrack(
@@ -287,7 +400,14 @@ export async function loadJioSaavnAsLavalinkTrack(
 ): Promise<{ track: any; node: any } | null> {
   if (!jioTrack?.streamUrl) return null;
 
-  for (const node of candidateNodes) {
+  // Prioritize Kasawa-MasterNode (supports direct HTTP 320 kbps streaming)
+  const sortedNodes = [...candidateNodes].sort((a, b) => {
+    if (a?.id === "Kasawa-MasterNode") return -1;
+    if (b?.id === "Kasawa-MasterNode") return 1;
+    return 0;
+  });
+
+  for (const node of sortedNodes) {
     if (!node || !node.connected) continue;
     try {
       const res: any = await node.search({ query: jioTrack.streamUrl }, requester);
