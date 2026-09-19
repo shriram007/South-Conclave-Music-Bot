@@ -118,15 +118,67 @@ export async function searchJioSaavn(query: string, limit: number = 5): Promise<
 }
 
 /**
- * Resolves a single best matching track from JioSaavn for a given song title and artist
+ * Auto-corrects typos in song queries using real-time search suggestion signals
+ */
+export async function getSpellingSuggestion(query: string): Promise<string | null> {
+  const cleanQ = query.replace(/\|.*/, "").replace(/\[.*?\]/g, "").replace(/\(.*?\)/g, "").trim();
+  if (!cleanQ || cleanQ.length < 3) return null;
+
+  const candidates = [cleanQ, `${cleanQ} song`];
+  for (const q of candidates) {
+    try {
+      const url = `https://suggestqueries.google.com/complete/search?client=chrome&q=${encodeURIComponent(q)}`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(1500) });
+      if (!res.ok) continue;
+      const data: any = await res.json();
+      if (Array.isArray(data[1]) && data[1].length > 0) {
+        for (const item of data[1]) {
+          const cleaned = String(item)
+            .replace(/ songs?.*$/i, "")
+            .replace(/ lyrics.*$/i, "")
+            .replace(/ ringtone.*$/i, "")
+            .replace(/ download.*$/i, "")
+            .trim();
+          if (cleaned && cleaned.toLowerCase() !== cleanQ.toLowerCase()) {
+            return cleaned;
+          }
+        }
+      }
+    } catch {}
+  }
+  return null;
+}
+
+/**
+ * Resolves a single best matching track from JioSaavn for a given song title and artist with typo correction
  */
 export async function resolveJioSaavnTrack(title: string, artist: string = ""): Promise<JioSaavnTrack | null> {
   const query = `${title} ${artist}`.trim();
-  const results = await searchJioSaavn(query, 5);
+  let results = await searchJioSaavn(query, 5);
+
+  const cleanTarget = title.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+  // Check if any result has reasonable match with query
+  const hasGoodMatch = results.some((t) => {
+    const cleanCand = t.title.toLowerCase().replace(/[^a-z0-9]/g, "");
+    return cleanCand.includes(cleanTarget) || cleanTarget.includes(cleanCand);
+  });
+
+  // If no direct results or title mismatch (e.g. typos), attempt smart typo correction
+  if (!hasGoodMatch) {
+    const suggestion = await getSpellingSuggestion(query);
+    if (suggestion) {
+      console.log(`[JioSaavn Resolver] Typo detected in "${query}". Auto-correcting to "${suggestion}"...`);
+      const correctedResults = await searchJioSaavn(suggestion, 5);
+      if (correctedResults.length > 0) {
+        results = correctedResults;
+      }
+    }
+  }
+
   if (results.length === 0) return null;
 
   // Exact or close title match priority
-  const cleanTarget = title.toLowerCase().replace(/[^a-z0-9]/g, "");
   const best = results.find((t) => {
     const cleanCand = t.title.toLowerCase().replace(/[^a-z0-9]/g, "");
     return cleanCand.includes(cleanTarget) || cleanTarget.includes(cleanCand);

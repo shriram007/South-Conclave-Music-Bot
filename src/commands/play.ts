@@ -198,7 +198,26 @@ export async function smartSearch(
     }
   };
 
-  // 1. Try YouTube Music (ytmsearch) across connected healthy nodes
+  // 1. Try JioSaavn 320 kbps Studio Master first (unrestricted, authentic 320 kbps AAC, typo-tolerant)
+  try {
+    const jioTrack = await resolveJioSaavnTrack(query);
+    if (jioTrack) {
+      const candidateNodes = [
+        ...(player.node?.connected ? [player.node] : []),
+        ...Array.from(lavalink.nodeManager.nodes.values()).filter((n: any) => n.connected && n.id !== player.node?.id),
+      ];
+      const converted = await loadJioSaavnAsLavalinkTrack(jioTrack, user, candidateNodes);
+      if (converted) {
+        syncPlayerNode(converted.node);
+        console.log(`[SmartSearch] Resolved "${converted.track.info.title}" via JioSaavn 320kbps Studio Master on node "${converted.node.id}"`);
+        return { loadType: "track", tracks: [converted.track] };
+      }
+    }
+  } catch (e: any) {
+    console.warn("[SmartSearch] JioSaavn resolution notice:", e?.message || e);
+  }
+
+  // 2. Try YouTube Music (ytmsearch) across connected healthy nodes
   for (const node of nodesToTry) {
     try {
       const res: any = await executeSearchWithTimeout(node, { query, source: "ytmsearch" });
@@ -219,7 +238,7 @@ export async function smartSearch(
     }
   }
 
-  // 2. Try YouTube search appending "audio" (favors authentic studio tracks over age-gated music videos)
+  // 3. Try YouTube search appending "audio" (favors authentic studio tracks over age-gated music videos)
   for (const node of nodesToTry) {
     try {
       const res: any = await executeSearchWithTimeout(node, { query: `${query} audio`, source: "ytsearch" });
@@ -240,7 +259,7 @@ export async function smartSearch(
     }
   }
 
-  // 3. Try SoundCloud search (scsearch) - ZERO YouTube login walls, fast & unrestricted, verified relevance
+  // 4. Try SoundCloud search (scsearch) - ZERO YouTube login walls, fast & unrestricted, verified relevance
   for (const node of nodesToTry) {
     try {
       const res: any = await executeSearchWithTimeout(node, { query, source: "scsearch" });
@@ -261,30 +280,11 @@ export async function smartSearch(
     }
   }
 
-  // 4. Return highest scoring candidate if it passes reasonable relevance threshold (>= 0.45)
+  // 5. Return highest scoring candidate if it passes reasonable relevance threshold (>= 0.45)
   if (bestCandidate && bestScore >= 0.45) {
     syncPlayerNode(bestCandidate.node);
     console.log(`[SmartSearch] Returning best fuzzy candidate "${bestCandidate.tracks[0].info.title}" (score: ${bestScore.toFixed(2)}) on node "${bestCandidate.node.id}"`);
     return { ...bestCandidate.res, tracks: bestCandidate.tracks };
-  }
-
-  // 5. Try JioSaavn 320 kbps Studio Audio fallback (unrestricted, authentic 320 kbps AAC)
-  try {
-    const jioTrack = await resolveJioSaavnTrack(query);
-    if (jioTrack) {
-      const candidateNodes = [
-        ...(player.node?.connected ? [player.node] : []),
-        ...Array.from(lavalink.nodeManager.nodes.values()).filter((n: any) => n.connected && n.id !== player.node?.id),
-      ];
-      const converted = await loadJioSaavnAsLavalinkTrack(jioTrack, user, candidateNodes);
-      if (converted) {
-        syncPlayerNode(converted.node);
-        console.log(`[SmartSearch] Resolved "${converted.track.info.title}" via JioSaavn 320kbps Studio Master on node "${converted.node.id}"`);
-        return { loadType: "track", tracks: [converted.track] };
-      }
-    }
-  } catch (e: any) {
-    console.warn("[SmartSearch] JioSaavn fallback error:", e?.message || e);
   }
 
   return null;
