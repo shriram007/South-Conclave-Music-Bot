@@ -27,6 +27,7 @@ export const helpCommand = {
           name: "▶️ Playback Commands",
           value:
             "`/play <query>` — Play any song, album, or playlist (Spotify / Apple Music / YT / JioSaavn)\n" +
+            "`/jiosaavn <query>` (or `/jio`) — Stream directly from JioSaavn in authentic 320 kbps Studio Master\n" +
             "`/pause` — Pause current audio stream (smooth fade-out)\n" +
             "`/resume` — Resume playback (smooth fade-in)\n" +
             "`/skip` — Skip to next song\n" +

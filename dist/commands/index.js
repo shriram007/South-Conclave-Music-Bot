@@ -16,8 +16,11 @@ import { skiptoCommand } from "./skipto.js";
 import { moveCommand } from "./move.js";
 import { normalizeCommand } from "./normalize.js";
 import { playlistCommand } from "./playlist.js";
+import { jioCommand, jiosaavnCommand } from "./jiosaavn.js";
 export const commands = [
     playCommand,
+    jiosaavnCommand,
+    jioCommand,
     pauseCommand,
     resumeCommand,
     skipCommand,
