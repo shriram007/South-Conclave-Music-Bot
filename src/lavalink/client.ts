@@ -413,9 +413,9 @@ export function getMasterNodeConfigs(): LavalinkNodeOptions[] {
     },
     {
       authorization: "free",
-      host: "lavalink.triniumhost.com",
-      port: 4333,
-      secure: false,
+      host: "nodelink.triniumhost.com",
+      port: 443,
+      secure: true,
       id: "Trinium-Studio",
       retryAmount: 1000,
       retryDelay: 5000,
