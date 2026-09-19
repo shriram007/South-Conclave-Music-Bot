@@ -317,7 +317,7 @@ export function detectTrackLanguage(title, author = "") {
         return "punjabi";
     // 4. Prominent Artists, Composers, and Movie Keywords
     // Tamil
-    if (/\b(anirudh|yuvan|ilayaraja|ilayaraaja|harris jayaraj|santhosh narayanan|sa-na|dhanush|vijay sethupathi|trisha|govind vasantha|sid sriram|u1|spb|karthik|chinmayi|naresh iyer|gv prakash|g\.v\. prakash|d imman|vijay|ajith|suriya|rajinikanth|kamal haasan|vignesh shivan|sean roldan|pradeep kumar|dhee|haricharan|shweta mohan|vijay antony|deva|vidyasagar|stephen zechariah|keba jeremiah|ar rahman|a\.r\. rahman|a\.r\.rahman|rahman|roja|bombay|kandukondain|alaipayuthey|uzhavan|vinnaithaandi|mudhalvan|sivaji|gentleman|kadhal|kadhale|kaathalae|kanne|kannamma|vaathi|mersal|leo|jailer|master|vikram|kaaviyathalaivan|aarambam|asuran|karnan|raayan|goat|anbe shivam|jeans|vinnai|munbe|vaarayo|idhazhin|mazhai|yennai|konjam|kadhal|sol|en kadhal|yen kadhal|thalli pogathey|neethanae|nenjukulle|kannaana|rowdy baby|chellamma|naanum rowdy)\b/i.test(text)) {
+    if (/\b(anirudh|yuvan|ilayaraja|ilayaraaja|harris jayaraj|santhosh narayanan|sa-na|dhanush|vijay sethupathi|trisha|govind vasantha|sid sriram|u1|spb|karthik|chinmayi|naresh iyer|gv prakash|g\.v\. prakash|d imman|vijay|ajith|suriya|rajinikanth|kamal haasan|vignesh shivan|sean roldan|pradeep kumar|dhee|haricharan|shweta mohan|vijay antony|deva|vidyasagar|stephen zechariah|keba jeremiah|kaadhal|kadhal|kadhale|kaathalae|kanne|kannamma|vaathi|mersal|leo|jailer|master|vikram|kaaviyathalaivan|aarambam|asuran|karnan|raayan|goat|anbe shivam|kandukondain|jeans|alaipayuthey|vinnaithaandi|mudhalvan|sivaji)\b/i.test(text)) {
         return "tamil";
     }
     // Telugu
