@@ -55,6 +55,31 @@ export async function clearAllFilters(player) {
     }
 }
 /**
+ * Auto-maximizes voice channel bitrate to server peak (up to 384 kbps for Tier 3, 256 kbps for Tier 2, 128 kbps for Tier 1, 96 kbps for Tier 0)
+ */
+export async function autoMaximizeVoiceChannelBitrate(voiceChannel) {
+    if (!voiceChannel)
+        return;
+    try {
+        const tier = voiceChannel.guild.premiumTier;
+        let maxBitrate = 96000;
+        if (tier === 1)
+            maxBitrate = 128000;
+        if (tier === 2)
+            maxBitrate = 256000;
+        if (tier === 3)
+            maxBitrate = 384000;
+        if (voiceChannel.bitrate < maxBitrate) {
+            const botMember = voiceChannel.guild.members.me;
+            if (botMember?.permissions.has("ManageChannels")) {
+                await voiceChannel.setBitrate(maxBitrate, "South Conclave Audiophile Auto-Optimization").catch(() => { });
+                console.log(`[Audio Quality] Auto-maximized voice channel "${voiceChannel.name}" to ${Math.round(maxBitrate / 1000)} kbps (Tier ${tier} Peak)!`);
+            }
+        }
+    }
+    catch { }
+}
+/**
  * Validates that an autoplay recommendation is a genuine new song and not a live/remix/cover of a previous song
  */
 export function isSameSongOrJunk(candidateTitle, previousTracks) {
@@ -520,10 +545,11 @@ export function initLavalink(client) {
             }
             // Start live progress bar updates
             startLivePlayerTicker(player);
-            // Check voice channel bitrate quality and warn if low
+            // Auto-maximize and check voice channel bitrate quality
             if (player.voiceChannelId) {
                 const voiceChan = channel.guild.channels.cache.get(player.voiceChannelId);
                 if (voiceChan && voiceChan.isVoiceBased()) {
+                    autoMaximizeVoiceChannelBitrate(voiceChan).catch(() => { });
                     const bitrateInfo = getChannelBitrateInfo(voiceChan);
                     if (!bitrateInfo.isMaxQuality) {
                         channel.send({
@@ -908,26 +934,9 @@ export async function getOrCreatePlayer(interaction) {
         console.log(`[Player] Connecting to voice channel ${voiceChannel.name}...`);
         await player.connect();
         console.log(`[Player] Connected to voice channel ${voiceChannel.name}!`);
-        // Auto-maximize Voice Channel Bitrate up to server limit (up to 384 kbps)
-        try {
-            const tier = voiceChannel.guild.premiumTier;
-            let maxBitrate = 96000;
-            if (tier === 1)
-                maxBitrate = 128000;
-            if (tier === 2)
-                maxBitrate = 256000;
-            if (tier === 3)
-                maxBitrate = 384000;
-            if (voiceChannel.bitrate < maxBitrate) {
-                const botMember = voiceChannel.guild.members.me;
-                if (botMember?.permissions.has("ManageChannels")) {
-                    await voiceChannel.setBitrate(maxBitrate, "South Conclave Audiophile Auto-Optimization").catch(() => { });
-                    console.log(`[Audio Quality] Auto-maximized voice channel "${voiceChannel.name}" to ${Math.round(maxBitrate / 1000)} kbps (Tier ${tier} Peak)!`);
-                }
-            }
-        }
-        catch { }
     }
+    // Ensure voice channel bitrate is auto-maximized to server limits (up to 384 kbps)
+    await autoMaximizeVoiceChannelBitrate(voiceChannel);
     return { player };
 }
 const updaterStates = new Map();

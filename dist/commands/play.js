@@ -2,7 +2,7 @@ import { EmbedBuilder, SlashCommandBuilder, } from "discord.js";
 import { getBestNode, getOrCreatePlayer, isNodeHealthy, lavalink, markNodeDegraded, restrictedTrackIds, updateActivePlayerMessage } from "../lavalink/client.js";
 import { autoDeleteReply } from "../utils/cleanup.js";
 import { getFavorites } from "../utils/favorites.js";
-import { formatDuration, getSourceInfo, isRelevantTrack } from "../utils/formatters.js";
+import { formatDuration, getSourceInfo, getTrackRelevanceScore, isRelevantTrack } from "../utils/formatters.js";
 import { getPlaylist, getUserPlaylists } from "../utils/playlists.js";
 import { getMusicSuggestions } from "../utils/suggestions.js";
 async function resolveSpotifyTrack(url) {
@@ -136,7 +136,19 @@ export async function smartSearch(player, query, isUrl, user) {
         }
         console.warn(`[SmartSearch] ${label} on "${node.id}" failed:`, errMsg);
     };
-    let fallbackCandidate = null;
+    let bestCandidate = null;
+    let bestScore = 0;
+    const updateCandidate = (res, node, viable) => {
+        for (const t of viable) {
+            const titleScore = getTrackRelevanceScore(t.info.title, query);
+            const authorScore = getTrackRelevanceScore(t.info.author, query);
+            const score = Math.max(titleScore, authorScore);
+            if (score > bestScore) {
+                bestScore = score;
+                bestCandidate = { res, node, tracks: [t, ...viable.filter((x) => x !== t)] };
+            }
+        }
+    };
     // 1. Try YouTube Music (ytmsearch) across connected healthy nodes
     for (const node of nodesToTry) {
         try {
@@ -144,8 +156,7 @@ export async function smartSearch(player, query, isUrl, user) {
             if (res?.tracks?.length && res.loadType !== "empty" && res.loadType !== "error") {
                 const viable = res.tracks.filter((t) => !restrictedTrackIds.has(t.info.identifier));
                 if (viable.length > 0) {
-                    if (!fallbackCandidate)
-                        fallbackCandidate = { res, node, tracks: viable };
+                    updateCandidate(res, node, viable);
                     const relevant = viable.filter((t) => isRelevantTrack(t.info.title, query) || isRelevantTrack(t.info.author, query));
                     if (relevant.length > 0) {
                         syncPlayerNode(node);
@@ -166,9 +177,8 @@ export async function smartSearch(player, query, isUrl, user) {
             if (res?.tracks?.length && res.loadType !== "empty" && res.loadType !== "error") {
                 const viable = res.tracks.filter((t) => !restrictedTrackIds.has(t.info.identifier));
                 if (viable.length > 0) {
-                    if (!fallbackCandidate)
-                        fallbackCandidate = { res, node, tracks: viable };
-                    const relevant = viable.filter((t) => isRelevantTrack(t.info.title, query));
+                    updateCandidate(res, node, viable);
+                    const relevant = viable.filter((t) => isRelevantTrack(t.info.title, query) || isRelevantTrack(t.info.author, query));
                     if (relevant.length > 0) {
                         syncPlayerNode(node);
                         console.log(`[SmartSearch] Found "${relevant[0].info.title}" via ytsearch (audio) on node "${node.id}"`);
@@ -188,9 +198,8 @@ export async function smartSearch(player, query, isUrl, user) {
             if (res?.tracks?.length && res.loadType !== "empty" && res.loadType !== "error") {
                 const viable = res.tracks.filter((t) => !restrictedTrackIds.has(t.info.identifier));
                 if (viable.length > 0) {
-                    if (!fallbackCandidate)
-                        fallbackCandidate = { res, node, tracks: viable };
-                    const relevant = viable.filter((t) => isRelevantTrack(t.info.title, query));
+                    updateCandidate(res, node, viable);
+                    const relevant = viable.filter((t) => isRelevantTrack(t.info.title, query) || isRelevantTrack(t.info.author, query));
                     if (relevant.length > 0) {
                         syncPlayerNode(node);
                         console.log(`[SmartSearch] Found "${relevant[0].info.title}" via scsearch on node "${node.id}"`);
@@ -203,11 +212,11 @@ export async function smartSearch(player, query, isUrl, user) {
             handleSearchError(node, e, "scsearch");
         }
     }
-    // 4. Return fallback candidate if no strict relevance match was found across engines
-    if (fallbackCandidate) {
-        syncPlayerNode(fallbackCandidate.node);
-        console.log(`[SmartSearch] Returning best candidate "${fallbackCandidate.tracks[0].info.title}" on node "${fallbackCandidate.node.id}"`);
-        return { ...fallbackCandidate.res, tracks: fallbackCandidate.tracks };
+    // 4. Return highest scoring candidate if it passes reasonable relevance threshold (>= 0.45)
+    if (bestCandidate && bestScore >= 0.45) {
+        syncPlayerNode(bestCandidate.node);
+        console.log(`[SmartSearch] Returning best fuzzy candidate "${bestCandidate.tracks[0].info.title}" (score: ${bestScore.toFixed(2)}) on node "${bestCandidate.node.id}"`);
+        return { ...bestCandidate.res, tracks: bestCandidate.tracks };
     }
     return null;
 }

@@ -177,11 +177,47 @@ export function getChannelBitrateInfo(channel: VoiceBasedChannel): {
 }
 
 /**
- * Verifies that a search result or fallback candidate is genuinely relevant to the requested song.
- * Prevents playing completely unrelated DJ sets, podcasts, or mixes.
+ * Calculates Levenshtein edit distance between two strings
  */
-export function isRelevantTrack(candidateTitle: string, targetTitle: string): boolean {
-  if (!candidateTitle || !targetTitle) return false;
+export function levenshteinDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+
+  const matrix: number[][] = [];
+  for (let i = 0; i <= b.length; i++) matrix[i] = [i];
+  for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
+
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      if (b.charAt(i - 1) === a.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1, // substitution
+          matrix[i][j - 1] + 1,     // insertion
+          matrix[i - 1][j] + 1      // deletion
+        );
+      }
+    }
+  }
+  return matrix[b.length][a.length];
+}
+
+/**
+ * Normalized fuzzy similarity score between two words [0.0 - 1.0]
+ */
+export function calculateFuzzySimilarity(tokenA: string, tokenB: string): number {
+  const maxLen = Math.max(tokenA.length, tokenB.length);
+  if (maxLen === 0) return 1.0;
+  return 1.0 - levenshteinDistance(tokenA, tokenB) / maxLen;
+}
+
+/**
+ * Computes relevance score between candidate track and target query [0.0 - 1.0]
+ */
+export function getTrackRelevanceScore(candidateTitle: string, targetTitle: string): number {
+  if (!candidateTitle || !targetTitle) return 0;
 
   const normalize = (s: string) =>
     s
@@ -193,18 +229,41 @@ export function isRelevantTrack(candidateTitle: string, targetTitle: string): bo
   const normTarget = normalize(targetTitle);
   const normCandidate = normalize(candidateTitle);
 
-  // Common noise words in titles
+  if (normCandidate === normTarget) return 1.0;
+  if (normCandidate.includes(normTarget)) return 0.95;
+
   const noise = new Set([
     "from", "song", "video", "official", "audio", "lyric", "lyrical",
     "full", "movie", "the", "and", "with", "track", "music", "original",
   ]);
 
   const targetTokens = normTarget.split(" ").filter((w) => w.length >= 3 && !noise.has(w));
+  const candidateTokens = normCandidate.split(" ").filter((w) => w.length >= 3 && !noise.has(w));
 
   if (targetTokens.length === 0) {
-    return normCandidate.includes(normTarget);
+    return normCandidate.includes(normTarget) ? 0.85 : 0;
   }
 
-  // The candidate must match at least one significant keyword (e.g. "kannamma")
-  return targetTokens.some((token) => normCandidate.includes(token));
+  let maxScore = 0;
+  for (const tToken of targetTokens) {
+    if (normCandidate.includes(tToken)) {
+      maxScore = Math.max(maxScore, 0.85);
+      continue;
+    }
+    for (const cToken of candidateTokens) {
+      const sim = calculateFuzzySimilarity(tToken, cToken);
+      if (sim > maxScore) maxScore = sim;
+    }
+  }
+
+  return maxScore;
 }
+
+/**
+ * Verifies that a search result or fallback candidate is genuinely relevant to the requested song.
+ * Uses phonetic/fuzzy Levenshtein distance (e.g., handles typos like 'yarumula' -> 'yaarumilla').
+ */
+export function isRelevantTrack(candidateTitle: string, targetTitle: string, minSimilarity: number = 0.65): boolean {
+  return getTrackRelevanceScore(candidateTitle, targetTitle) >= minSimilarity;
+}
+
