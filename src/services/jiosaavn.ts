@@ -1,4 +1,5 @@
 import CryptoJS from "crypto-js";
+import { parseTrackTitle } from "../utils/formatters.js";
 
 export interface JioSaavnTrack {
   id: string;
@@ -102,15 +103,8 @@ async function safeJsonFetch(url: string, headers: any, timeoutMs: number = 5000
  */
 export async function searchJioSaavn(query: string, limit: number = 5): Promise<JioSaavnTrack[]> {
   try {
-    const cleanQuery = query
-      .replace(/\|.*/, "")
-      .replace(/\[.*?\]/g, "")
-      .replace(/\(.*?\)/g, "")
-      .replace(/official video/gi, "")
-      .replace(/video song/gi, "")
-      .replace(/lyric video/gi, "")
-      .replace(/audio song/gi, "")
-      .trim();
+    const parsed = parseTrackTitle(query);
+    const cleanQuery = parsed.fullSearchQuery || query.replace(/\|.*/, "").trim();
 
     const searchUrl = `https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&_marker=0&cc=in&includeMetaTags=1&p=1&n=${limit}&q=${encodeURIComponent(cleanQuery)}`;
 
@@ -143,37 +137,14 @@ export async function searchJioSaavn(query: string, limit: number = 5): Promise<
 /**
  * Strips YouTube fluff (VEVO, record labels, channels, video/lyric tags) and extracts clean song & artist
  */
-export function sanitizeMusicQuery(rawTitle: string, rawAuthor: string = ""): { searchTitle: string; searchArtist: string } {
-  let cleanAuthor = (rawAuthor || "")
-    .replace(/- Topic/gi, "")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  // Strip labels, channels, VEVO
-  if (/vevo|t-series|sony|zee|saregama|aditya|tips|channel|music|records|south|official/i.test(cleanAuthor)) {
-    cleanAuthor = "";
-  }
-
-  let title = rawTitle
-    .replace(/\|.*/, "") // Strip everything after first pipe "|"
-    .replace(/\[.*?\]/g, "")
-    .replace(/\(.*?\)/g, "")
-    .replace(/official\s*(music)?\s*(video|audio|lyric|track)?/gi, "")
-    .replace(/lyric(al)?\s*(video|song|audio)?/gi, "")
-    .replace(/video\s*song/gi, "")
-    .replace(/full\s*song/gi, "")
-    .replace(/4k|8k|hd|hq|audio/gi, "")
-    .trim();
-
-  // If title has Movie - SongName or SongName - Artist
-  if (title.includes(" - ")) {
-    const parts = title.split(" - ").map((p) => p.trim());
-    if (parts.length === 2) {
-      return { searchTitle: parts[1], searchArtist: cleanAuthor || parts[0] };
-    }
-  }
-
-  return { searchTitle: title, searchArtist: cleanAuthor };
+export function sanitizeMusicQuery(rawTitle: string, rawAuthor: string = ""): { searchTitle: string; searchArtist: string; movieOrAlbum: string; fullQuery: string } {
+  const parsed = parseTrackTitle(rawTitle, rawAuthor);
+  return {
+    searchTitle: parsed.songTitle,
+    searchArtist: parsed.artist,
+    movieOrAlbum: parsed.movieOrAlbum,
+    fullQuery: parsed.fullSearchQuery,
+  };
 }
 
 /**
@@ -249,36 +220,34 @@ export async function getSpellingSuggestion(query: string): Promise<string | nul
  * Resolves a single best matching track from JioSaavn for a given song title and artist with typo correction
  */
 export async function resolveJioSaavnTrack(title: string, artist: string = ""): Promise<JioSaavnTrack | null> {
-  const { searchTitle, searchArtist } = sanitizeMusicQuery(title, artist);
+  const { searchTitle, searchArtist, movieOrAlbum, fullQuery } = sanitizeMusicQuery(title, artist);
   const targetSongName = searchTitle || title;
 
-  const query = `${searchTitle} ${searchArtist}`.trim();
-  let results = await searchJioSaavn(query, 5);
+  const queriesToTry = [
+    fullQuery,
+    ...(movieOrAlbum && movieOrAlbum.toLowerCase() !== searchTitle.toLowerCase() ? [`${searchTitle} ${movieOrAlbum}`] : []),
+    ...(searchArtist ? [`${searchTitle} ${searchArtist}`] : []),
+    searchTitle,
+  ].filter(Boolean);
 
-  // 1. Check if any result matches the target song name
-  let best = results.find((t) => isFuzzyTitleMatch(t.title, targetSongName));
-
-  // 2. If no match and artist was supplied, try searching title alone (prevents channel/movie name collision)
-  if (!best && searchArtist) {
-    const soloResults = await searchJioSaavn(searchTitle, 5);
-    best = soloResults.find((t) => isFuzzyTitleMatch(t.title, targetSongName));
-    if (best) results = soloResults;
+  for (const q of queriesToTry) {
+    const results = await searchJioSaavn(q, 5);
+    const match = results.find((t) => isFuzzyTitleMatch(t.title, targetSongName));
+    if (match) return match;
   }
 
-  // 3. If still no match, attempt typo auto-correction
-  if (!best) {
-    const suggestion = (await getSpellingSuggestion(query)) || (await getSpellingSuggestion(searchTitle));
-    if (suggestion) {
-      console.log(`[JioSaavn Resolver] Typo detected in "${query}". Auto-correcting to "${suggestion}"...`);
-      const correctedResults = await searchJioSaavn(suggestion, 5);
-      best = correctedResults.find(
-        (t) => isFuzzyTitleMatch(t.title, suggestion) || isFuzzyTitleMatch(t.title, targetSongName)
-      );
-    }
+  // If still no match, attempt typo auto-correction
+  const suggestion = (await getSpellingSuggestion(fullQuery)) || (await getSpellingSuggestion(searchTitle));
+  if (suggestion) {
+    console.log(`[JioSaavn Resolver] Typo detected in "${fullQuery}". Auto-correcting to "${suggestion}"...`);
+    const correctedResults = await searchJioSaavn(suggestion, 5);
+    const match = correctedResults.find(
+      (t) => isFuzzyTitleMatch(t.title, suggestion) || isFuzzyTitleMatch(t.title, targetSongName)
+    );
+    if (match) return match;
   }
 
-  // STRICT: NEVER return results[0] unless it actually matches!
-  return best || null;
+  return null;
 }
 
 /**

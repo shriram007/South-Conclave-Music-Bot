@@ -7,7 +7,7 @@ import {
 import { getBestNode, getOrCreatePlayer, isNodeHealthy, lavalink, markNodeDegraded, purgeAutoplayTracks, restrictedTrackIds, updateActivePlayerMessage } from "../lavalink/client.js";
 import { autoDeleteReply } from "../utils/cleanup.js";
 import { getFavorites } from "../utils/favorites.js";
-import { formatDuration, getSourceInfo, getTrackRelevanceScore, isRelevantTrack } from "../utils/formatters.js";
+import { detectTrackLanguage, formatDuration, getSourceInfo, getTrackRelevanceScore, isRelevantTrack, parseTrackTitle } from "../utils/formatters.js";
 import { getPlaylist, getUserPlaylists } from "../utils/playlists.js";
 import { getMusicSuggestions } from "../utils/suggestions.js";
 import { isJioSaavnUrl, loadJioSaavnAsLavalinkTrack, resolveJioSaavnTrack, resolveJioSaavnUrl } from "../services/jiosaavn.js";
@@ -257,6 +257,34 @@ export async function smartSearch(
       }
     } catch (e: any) {
       handleSearchError(node, e, "ytmsearch");
+    }
+  }
+
+  // 1.5. If Indian query and YouTube Music had no studio match, try JioSaavn 320 kbps Studio Master
+  // (Prevents falling back to dialogue-laden YouTube movie video edits or anniversary specials)
+  const queryLang = detectTrackLanguage(query);
+  const isIndianQuery = ["tamil", "telugu", "malayalam", "kannada", "hindi", "punjabi"].includes(queryLang);
+  if (isIndianQuery) {
+    try {
+      const jioTrack = await resolveJioSaavnTrack(query);
+      if (jioTrack) {
+        const candidateNodes = [
+          ...(player.node?.connected ? [player.node] : []),
+          ...Array.from(lavalink.nodeManager.nodes.values()).filter((n: any) => n.connected && n.id !== player.node?.id),
+        ];
+        const converted = await loadJioSaavnAsLavalinkTrack(jioTrack, user, candidateNodes);
+        if (converted) {
+          syncPlayerNode(converted.node);
+          converted.track.userData = {
+            ...(converted.track.userData || {}),
+            command: "/play",
+          };
+          console.log(`[SmartSearch] Resolved Indian query "${query}" via JioSaavn 320kbps Studio Master on node "${converted.node.id}"`);
+          return { loadType: "track", tracks: [converted.track] };
+        }
+      }
+    } catch (e: any) {
+      console.warn("[SmartSearch] JioSaavn priority check notice:", e?.message || e);
     }
   }
 

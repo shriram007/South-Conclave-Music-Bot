@@ -3,7 +3,7 @@ import { LavalinkManager } from "lavalink-client";
 import { config } from "../config.js";
 import { buildPlayerMessage } from "./playerUI.js";
 import { autoDeleteMessage } from "../utils/cleanup.js";
-import { detectTrackLanguage, getChannelBitrateInfo, isLanguageCompatible, isRelevantTrack } from "../utils/formatters.js";
+import { detectTrackLanguage, getChannelBitrateInfo, isLanguageCompatible, isRelevantTrack, parseTrackTitle } from "../utils/formatters.js";
 import { is247Enabled } from "../utils/twentyFourSeven.js";
 import { clearGuildSession, saveActiveSessions } from "../utils/sessionRecovery.js";
 import { applyLoudnessNormalization } from "../commands/normalize.js";
@@ -84,22 +84,16 @@ export async function autoMaximizeVoiceChannelBitrate(voiceChannel) {
  * Validates that an autoplay recommendation is a genuine new song and not a live/remix/cover of a previous song
  */
 export function isSameSongOrJunk(candidateTitle, previousTracks) {
-    const simplify = (str) => str
-        .toLowerCase()
-        .replace(/\|.*/g, "")
-        .replace(/\[.*?\]/g, "")
-        .replace(/\(.*?\)/g, "")
-        .replace(/feat\..*/g, "")
-        .replace(/ft\..*/g, "")
-        .replace(/official.*/g, "")
-        .replace(/audio.*/g, "")
-        .replace(/video.*/g, "")
-        .replace(/remix.*/g, "")
-        .replace(/live.*/g, "")
-        .replace(/version.*/g, "")
-        .replace(/lyric.*/g, "")
-        .replace(/hd|4k|hq/gi, "")
-        .replace(/[^a-z0-9]/g, "");
+    const simplify = (str) => {
+        const parsed = parseTrackTitle(str);
+        return (parsed.songTitle || str)
+            .toLowerCase()
+            .replace(/feat\..*/g, "")
+            .replace(/ft\..*/g, "")
+            .replace(/remix.*/g, "")
+            .replace(/version.*/g, "")
+            .replace(/[^a-z0-9]/g, "");
+    };
     const lowTitle = candidateTitle.toLowerCase();
     const junkKeywords = ["karaoke", "instrumental", "tutorial", "tribute", "how to play", "synthesia", "cover", "bass boosted"];
     if (junkKeywords.some((j) => lowTitle.includes(j)))
@@ -110,7 +104,7 @@ export function isSameSongOrJunk(candidateTitle, previousTracks) {
     for (const prev of previousTracks) {
         const prevTitle = prev?.info?.title || "";
         const prevSimp = simplify(prevTitle);
-        if (prevSimp && (candSimp.includes(prevSimp) || prevSimp.includes(candSimp))) {
+        if (prevSimp && (candSimp === prevSimp || (candSimp.length >= 6 && prevSimp.length >= 6 && (candSimp.includes(prevSimp) || prevSimp.includes(candSimp))))) {
             return true; // Collision with a previously played song!
         }
     }
@@ -124,10 +118,13 @@ export function isSameSongOrJunk(candidateTitle, previousTracks) {
 export async function findAutoplayRecommendation(player, seedTrack) {
     const rawTitle = seedTrack.info.title || "";
     const rawAuthor = (seedTrack.info.author || "").replace(/- Topic/gi, "").trim();
-    const cleanTitle = rawTitle.replace(/\|.*/, "").replace(/\[.*?\]/g, "").replace(/\(.*?\)/g, "").trim();
+    const parsedSeed = parseTrackTitle(rawTitle, rawAuthor);
+    const cleanTitle = parsedSeed.songTitle || rawTitle;
+    const fullSeedQuery = parsedSeed.fullSearchQuery || `${cleanTitle} ${rawAuthor}`.trim();
+    const effectiveArtist = parsedSeed.artist || rawAuthor;
     const videoId = seedTrack.info.identifier;
     const seedLang = detectTrackLanguage(rawTitle, rawAuthor);
-    console.log(`[Smart Autoplay] Finding AI radio recommendations based on "${cleanTitle}" by "${rawAuthor}" (Language: ${seedLang.toUpperCase()})...`);
+    console.log(`[Smart Autoplay] Finding AI radio recommendations based on "${cleanTitle}" by "${effectiveArtist}" (Language: ${seedLang.toUpperCase()})...`);
     const connectedNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected);
     const healthyNodes = connectedNodes.filter((n) => isNodeHealthy(n.id));
     const kasawaNode = healthyNodes.find((n) => n.id === "Kasawa-MasterNode");
@@ -154,6 +151,7 @@ export async function findAutoplayRecommendation(player, seedTrack) {
     const previousTitles = [
         cleanTitle,
         rawTitle,
+        parsedSeed.fullSearchQuery,
         ...(player.queue.current?.info?.title ? [player.queue.current.info.title] : []),
         ...player.queue.previous.map((t) => t.info?.title).filter(Boolean),
         ...player.queue.tracks.map((t) => t.info?.title).filter(Boolean),
@@ -161,7 +159,7 @@ export async function findAutoplayRecommendation(player, seedTrack) {
     // Strategy 0: If current playing track came from JioSaavn (/jio), keep streaming pristine 320k JioSaavn Studio Radio!
     if (isJioSeed && ["tamil", "telugu", "malayalam", "hindi", "punjabi"].includes(seedLang)) {
         try {
-            const jioAuto = await findJioSaavnAutoplay(cleanTitle, rawAuthor, seedLang, historyIds, previousTitles);
+            const jioAuto = await findJioSaavnAutoplay(fullSeedQuery, effectiveArtist, seedLang, historyIds, previousTitles);
             if (jioAuto) {
                 const allPrev = [...player.queue.previous, ...(player.queue.current ? [player.queue.current] : [])];
                 if (isSameSongOrJunk(jioAuto.title, allPrev)) {
@@ -244,10 +242,10 @@ export async function findAutoplayRecommendation(player, seedTrack) {
     if (!foundCandidate) {
         const queriesToTry = [];
         if (seedLang !== "global" && seedLang !== "english") {
-            queriesToTry.push(`${cleanTitle} ${seedLang} songs`, `${rawAuthor} ${seedLang} hit songs`, `${cleanTitle} similar ${seedLang} songs`, `${rawAuthor} ${seedLang} radio`);
+            queriesToTry.push(`${fullSeedQuery} songs`, `${cleanTitle} similar ${seedLang} songs`, `${effectiveArtist} ${seedLang} hit songs`, `${effectiveArtist} ${seedLang} radio`);
         }
         else {
-            queriesToTry.push(`${cleanTitle} similar songs`, `${rawAuthor} similar artists`, `${cleanTitle} mix`, `${rawAuthor} top tracks`);
+            queriesToTry.push(`${fullSeedQuery} similar songs`, `${cleanTitle} mix`, `${effectiveArtist} similar artists`, `${effectiveArtist} top tracks`);
         }
         for (const query of queriesToTry) {
             if (foundCandidate)
@@ -282,7 +280,7 @@ export async function findAutoplayRecommendation(player, seedTrack) {
     // Strategy 3: JioSaavn 320 kbps Autoplay Discovery (unrestricted, authentic 320 kbps studio audio)
     if (!foundCandidate) {
         try {
-            const jioRec = await findJioSaavnAutoplay(cleanTitle, rawAuthor, seedLang, historyIds, previousTitles);
+            const jioRec = await findJioSaavnAutoplay(fullSeedQuery, effectiveArtist, seedLang, historyIds, previousTitles);
             if (jioRec) {
                 const allPrev = [...player.queue.previous, ...(player.queue.current ? [player.queue.current] : [])];
                 if (!isSameSongOrJunk(jioRec.title, allPrev)) {
@@ -309,14 +307,22 @@ export async function findAutoplayRecommendation(player, seedTrack) {
     const hqSearchNode = kasawaNode || milloNode || nodesToTry[0];
     if (!isJio && hqSearchNode) {
         try {
-            const hqQuery = `${(foundCandidate.info.title || "").replace(/\|.*/, "").replace(/\[.*?\]/g, "").replace(/\(.*?\)/g, "").trim()} ${(foundCandidate.info.author || "").replace(/- Topic/gi, "").trim()}`.trim();
+            const parsedCandidate = parseTrackTitle(foundCandidate.info.title || "", foundCandidate.info.author || "");
+            const hqQuery = parsedCandidate.fullSearchQuery || `${parsedCandidate.songTitle} ${parsedCandidate.artist}`.trim();
             const hqRes = await hqSearchNode.search({
                 query: hqQuery,
                 source: "ytmsearch",
             }, seedTrack.requester).catch(() => null);
             if (hqRes?.tracks?.length && !restrictedTrackIds.has(hqRes.tracks[0].info.identifier)) {
-                console.log(`[Smart Autoplay] Upgraded "${foundCandidate.info.title}" to official 256kbps YouTube Music master: "${hqRes.tracks[0].info.title}" via ${hqSearchNode.id}`);
-                studioMasterTrack = hqRes.tracks[0];
+                const candidateMaster = hqRes.tracks[0];
+                // CRITICAL: Ensure upgraded track actually matches the candidate song title, NOT a different song from the same album!
+                if (isRelevantTrack(candidateMaster.info.title, parsedCandidate.songTitle, 0.60)) {
+                    console.log(`[Smart Autoplay] Upgraded "${foundCandidate.info.title}" to official 256kbps YouTube Music master: "${candidateMaster.info.title}" via ${hqSearchNode.id}`);
+                    studioMasterTrack = candidateMaster;
+                }
+                else {
+                    console.log(`[Smart Autoplay] Kept authentic candidate "${foundCandidate.info.title}" (studio master returned mismatched "${candidateMaster.info.title}")`);
+                }
             }
         }
         catch (e) {
@@ -831,19 +837,9 @@ export function initLavalink(client) {
         if (!player.getData("recovering_track")) {
             try {
                 player.setData("recovering_track", true);
-                const cleanTitle = rawTitle
-                    .replace(/\|.*/, "")
-                    .replace(/\[.*?\]/g, "")
-                    .replace(/\(.*?\)/g, "")
-                    .replace(/video song/gi, "")
-                    .replace(/official video/gi, "")
-                    .replace(/full video/gi, "")
-                    .replace(/lyric video/gi, "")
-                    .replace(/4k/gi, "")
-                    .replace(/hd/gi, "")
-                    .trim();
-                const cleanAuthor = (track.info.author || "").replace(/- Topic/gi, "").trim();
-                const fallbackQuery = `${cleanTitle} ${cleanAuthor}`.trim();
+                const parsedFailed = parseTrackTitle(rawTitle, track.info.author || "");
+                const cleanTitle = parsedFailed.songTitle || rawTitle;
+                const fallbackQuery = parsedFailed.fullSearchQuery || `${cleanTitle} ${track.info.author || ""}`.trim();
                 console.log(`[Universal Recovery] Stream restricted for "${rawTitle}" (ID: ${failedId}). Attempt #${recoveryAttempts} auto-recovering as "${fallbackQuery}"...`);
                 // Prioritize healthy alternate nodes over the node that just failed
                 const connectedNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected && !n.id.includes("Custom"));
@@ -866,7 +862,7 @@ export function initLavalink(client) {
                 // ── TIER 0: JioSaavn 320 kbps Studio Audio Recovery (<500ms) ──
                 // Completely circumvents YouTube datacenter 403 / IP rate limits and streams bit-perfect 320 kbps AAC audio!
                 try {
-                    const jioMatch = await resolveJioSaavnTrack(rawTitle, track.info.author || "");
+                    const jioMatch = await resolveJioSaavnTrack(fallbackQuery, parsedFailed.artist || track.info.author || "");
                     if (jioMatch) {
                         const jioLoaded = await loadJioSaavnAsLavalinkTrack(jioMatch, track.requester, [
                             player.node,

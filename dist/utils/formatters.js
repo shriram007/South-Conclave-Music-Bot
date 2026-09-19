@@ -163,6 +163,97 @@ export function getChannelBitrateInfo(channel) {
     };
 }
 /**
+ * Robust, production-grade parser for pipe/hyphen-delimited YouTube and music track titles.
+ * Handles Indian record labels (Think Music, Sony Music South, Saregama, T-Series) where
+ * titles are structured like "96 Songs | Anthaathi Video Song | Vijay Sethupathi | Govind Vasantha"
+ * without erroneously throwing away the song name after the first pipe "|".
+ */
+export function parseTrackTitle(rawTitle, rawAuthor = "") {
+    let title = (rawTitle || "").trim();
+    let movieOrAlbum = "";
+    let songTitle = "";
+    let artist = (rawAuthor || "").replace(/- Topic/gi, "").trim();
+    // Strip labels/channels from author
+    if (/vevo|t-series|sony|zee|saregama|aditya|tips|channel|think music|speed audio|lahari|yt records|speed records/i.test(artist)) {
+        artist = "";
+    }
+    // Extract movie name if parenthesized like (From "96")
+    const fromMatch = title.match(/\(From\s+["'](.+?)["']\)/i);
+    if (fromMatch)
+        movieOrAlbum = fromMatch[1].trim();
+    const cleanPart = (s) => s
+        .replace(/\[.*?\]/g, "")
+        .replace(/\(.*?\)/g, "")
+        .replace(/@\w+/g, "")
+        .replace(/-\s*(lyric(al)?|video|audio|song|official|teaser).*/gi, "")
+        .replace(/\b(official\s*(music)?\s*(video|audio|track|lyric(al)?|full)?)\b/gi, "")
+        .replace(/\b(video\s*song|lyric(al)?\s*video|lyric(al)?\s*song|audio\s*song|full\s*video|full\s*song|special\s*edit|exclusive\s*edit)\b/gi, "")
+        .replace(/\b(4k|8k|hd|hq|uhd|remastered|extended)\b/gi, "")
+        .replace(/\b(song|video|audio)\b/gi, "")
+        .replace(/\s+/g, " ")
+        .trim();
+    if (title.includes("|")) {
+        const segments = title.split("|").map((s) => s.trim()).filter(Boolean);
+        const albumKeywords = /\b(songs|all songs|jukebox|album|soundtrack|ost|audio songs)\b/i;
+        if (segments.length >= 2 && albumKeywords.test(segments[0])) {
+            // Segment 0 is "Movie Songs" (e.g. "96 Songs")
+            movieOrAlbum = segments[0].replace(albumKeywords, "").trim();
+            songTitle = cleanPart(segments[1]);
+            for (let i = 2; i < segments.length; i++) {
+                const seg = segments[i];
+                if (!artist && !seg.includes(",") && seg.length < 30) {
+                    artist = seg.trim();
+                }
+            }
+        }
+        else {
+            const seg0 = segments[0];
+            if (seg0.includes(" - ") && !/-\s*(lyric|video|audio)/i.test(seg0)) {
+                const sub = seg0.split(" - ").map((s) => s.trim());
+                movieOrAlbum = sub[0];
+                songTitle = cleanPart(sub[1]);
+            }
+            else {
+                songTitle = cleanPart(seg0);
+            }
+            if (segments.length > 1 && !movieOrAlbum) {
+                const seg1 = segments[1];
+                if (seg1.length < 30 && !seg1.includes(",")) {
+                    movieOrAlbum = cleanPart(seg1);
+                }
+            }
+        }
+    }
+    else if (title.includes(" - ")) {
+        const parts = title.split(" - ").map((s) => s.trim());
+        if (parts.length === 2) {
+            songTitle = cleanPart(parts[1]);
+            movieOrAlbum = cleanPart(parts[0]);
+        }
+        else {
+            songTitle = cleanPart(title);
+        }
+    }
+    else {
+        songTitle = cleanPart(title);
+    }
+    songTitle = songTitle.replace(/\b(song|video|audio)\b/gi, "").replace(/\s+/g, " ").trim();
+    movieOrAlbum = movieOrAlbum.replace(/\b(songs|all songs|movie|tamil|telugu|hindi)\b/gi, "").trim();
+    // If songTitle became empty, fallback to cleanPart of full title
+    if (!songTitle) {
+        songTitle = cleanPart(title);
+    }
+    const queryParts = [songTitle];
+    if (movieOrAlbum && movieOrAlbum.toLowerCase() !== songTitle.toLowerCase()) {
+        queryParts.push(movieOrAlbum);
+    }
+    if (artist && !queryParts.some((p) => p.toLowerCase().includes(artist.toLowerCase()))) {
+        queryParts.push(artist);
+    }
+    const fullSearchQuery = queryParts.join(" ").trim();
+    return { songTitle, movieOrAlbum, artist, fullSearchQuery };
+}
+/**
  * Calculates Levenshtein edit distance between two strings
  */
 export function levenshteinDistance(a, b) {
