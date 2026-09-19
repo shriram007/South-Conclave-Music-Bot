@@ -746,7 +746,17 @@ export function initLavalink(client) {
         clearUpdaterState(player.guildId);
     });
     lavalink.on("trackStuck", async (player, track, payload) => {
-        console.warn(`[Lavalink] Audio stream stuck for "${track?.info.title}" (${payload.thresholdMs}ms threshold). Seamlessly auto-skipping...`);
+        console.warn(`[Lavalink] Audio stream stuck for "${track?.info.title}" (${payload.thresholdMs}ms threshold). Handling recovery...`);
+        // 1. If this node stalled on the audio stream, mark it degraded for 60 seconds
+        if (player.node?.id && player.node.id !== "Kasawa-MasterNode") {
+            markNodeDegraded(player.node.id, 60000);
+        }
+        // 2. Proactively re-align player to Kasawa-MasterNode if available and healthy
+        const kasawa = lavalink.nodeManager.nodes.get("Kasawa-MasterNode");
+        if (kasawa?.connected && player.node?.id !== "Kasawa-MasterNode" && isNodeHealthy("Kasawa-MasterNode")) {
+            console.log(`[Lavalink] Migrating stuck player from ${player.node?.id} back to "Kasawa-MasterNode"...`);
+            await player.changeNode(kasawa, false).catch(() => { });
+        }
         if (player.textChannelId) {
             const channel = client.channels.cache.get(player.textChannelId);
             channel?.send({
@@ -758,25 +768,21 @@ export function initLavalink(client) {
     lavalink.on("trackError", async (player, track, payload) => {
         const errorMsg = payload?.exception?.message || JSON.stringify(payload);
         console.error(`[Lavalink] Error playing "${track?.info.title}":`, errorMsg);
-        const isNodeBlockedOrDegraded = errorMsg.includes("Unexpected token '<'") ||
+        const isNodeNetworkDown = errorMsg.includes("Unexpected token '<'") ||
             errorMsg.includes("<html>") ||
             errorMsg.includes("502") ||
             errorMsg.includes("503") ||
-            errorMsg.includes("403") ||
-            errorMsg.includes("All clients failed") ||
-            errorMsg.includes("requires sign-in") ||
-            errorMsg.includes("This network flagged") ||
-            errorMsg.includes("is no longer supported") ||
-            errorMsg.includes("Something broke when playing the track") ||
-            errorMsg.includes("Sign in to confirm your age");
-        if (isNodeBlockedOrDegraded) {
-            console.warn(`[Node Circuit Breaker] Node "${player.node?.id}" encountered stream restriction / error. Marking degraded for 10 minutes.`);
-            markNodeDegraded(player.node.id, 600000);
+            errorMsg.includes("ConnectTimeoutError") ||
+            errorMsg.includes("fetch failed");
+        // Only mark node degraded for genuine network outages, NOT track-specific video restrictions!
+        if (isNodeNetworkDown && player.node?.id !== "Kasawa-MasterNode") {
+            console.warn(`[Node Circuit Breaker] Node "${player.node?.id}" network drop. Marking degraded for 60s.`);
+            markNodeDegraded(player.node.id, 60000);
         }
         if (!track)
             return;
-        // Cache the failed track ID ONLY if it is a genuine video restriction (not just an IP block on the node)
-        if (!isNodeBlockedOrDegraded && track.info.identifier) {
+        // Cache the failed track ID so we never retry or loop on a broken YouTube video
+        if (track.info.identifier) {
             if (restrictedTrackIds.size >= 500) {
                 const oldest = restrictedTrackIds.values().next().value;
                 if (oldest)

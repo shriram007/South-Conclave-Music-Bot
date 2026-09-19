@@ -222,8 +222,8 @@ export function getTrackRelevanceScore(candidateTitle, targetTitle) {
         "from", "song", "video", "official", "audio", "lyric", "lyrical",
         "full", "movie", "the", "and", "with", "track", "music", "original",
     ]);
-    const targetTokens = normTarget.split(" ").filter((w) => w.length >= 3 && !noise.has(w));
-    const candidateTokens = normCandidate.split(" ").filter((w) => w.length >= 3 && !noise.has(w));
+    const targetTokens = normTarget.split(" ").filter((w) => (w.length >= 2 || /\d/.test(w)) && !noise.has(w));
+    const candidateTokens = normCandidate.split(" ").filter((w) => (w.length >= 2 || /\d/.test(w)) && !noise.has(w));
     if (targetTokens.length === 0) {
         return normCandidate.includes(normTarget) ? 0.85 : 0;
     }
@@ -269,8 +269,16 @@ export function getTrackRelevanceScore(candidateTitle, targetTitle) {
         totalScore += tokenBest;
     }
     const matchRatio = matchedTokens / targetTokens.length;
-    const avgScore = totalScore / targetTokens.length;
-    return matchRatio >= 0.5 ? Math.max(avgScore, matchRatio * 0.9) : avgScore * 0.5;
+    let avgScore = totalScore / targetTokens.length;
+    // Penalize candidate if query contained specific numbers (e.g. "96", "2", "3") not found in candidate
+    const targetNumbers = targetTokens.filter((w) => /\d+/.test(w));
+    const candidateNumbers = candidateTokens.filter((w) => /\d+/.test(w));
+    for (const num of targetNumbers) {
+        if (!candidateNumbers.includes(num)) {
+            avgScore *= 0.35; // Severe penalty if requested movie year / number is missing
+        }
+    }
+    return matchRatio >= 0.7 ? Math.max(avgScore, matchRatio * 0.9) : avgScore * (matchRatio >= 0.5 ? 0.7 : 0.35);
 }
 /**
  * Verifies that a search result or fallback candidate is genuinely relevant to the requested song.

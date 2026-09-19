@@ -512,6 +512,8 @@ async function handleButtonInteraction(interaction) {
             err.message?.includes("not connected") ||
             err.message?.includes("Socket") ||
             err.message?.includes("fetch failed") ||
+            err.message?.includes("aborted due to timeout") ||
+            err.name === "AbortError" ||
             err.name === "ConnectTimeoutError" ||
             err.cause?.code === "UND_ERR_CONNECT_TIMEOUT") {
             if (player?.node)
