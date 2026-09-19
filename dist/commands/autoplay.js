@@ -1,3 +1,4 @@
+import { purgeAutoplayTracks } from "../lavalink/client.js";
 import { SlashCommandBuilder, } from "discord.js";
 import { lavalink, updateActivePlayerMessage, validateVoiceGate } from "../lavalink/client.js";
 import { autoDeleteReply } from "../utils/cleanup.js";
@@ -25,6 +26,8 @@ export const autoplayCommand = {
         const currentAutoplay = Boolean(player.getData("autoplay") ?? true);
         const newAutoplay = modeOpt ? modeOpt === "on" : !currentAutoplay;
         player.setData("autoplay", newAutoplay);
+        if (!newAutoplay)
+            purgeAutoplayTracks(player);
         await updateActivePlayerMessage(player, true);
         await interaction.reply(newAutoplay
             ? "📻 **Smart Autoplay Enabled!** When the queue finishes, similar songs will play automatically like Spotify Radio."

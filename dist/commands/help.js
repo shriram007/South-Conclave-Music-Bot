@@ -12,12 +12,12 @@ export const helpCommand = {
             ...(botAvatar ? { iconURL: botAvatar } : {}),
         })
             .setTitle("🎧 South Conclave Music Bot — Command Center")
-            .setDescription("Studio-grade audio streaming for Discord. Plays songs from **Spotify**, **Apple Music**, **YouTube Music**, **JioSaavn**, and **SoundCloud** with 300+ kbps targeted Opus quality.\n")
+            .setDescription("Studio-grade audio streaming for Discord. Plays songs from **Spotify**, **Apple Music**, **YouTube Music**, **JioSaavn**, and **SoundCloud** using Lavalink audio playback.\n")
             .addFields([
             {
                 name: "▶️ Playback Commands",
                 value: "`/play <query>` — Play any song, album, or playlist (Spotify / Apple Music / YT / JioSaavn)\n" +
-                    "`/jiosaavn <query>` (or `/jio`) — Stream directly from JioSaavn in authentic 320 kbps Studio Master\n" +
+                    "`/jiosaavn <query>` (or `/jio`) — Stream directly from JioSaavn with the available catalog bitrate\n" +
                     "`/pause` — Pause current audio stream (smooth fade-out)\n" +
                     "`/resume` — Resume playback (smooth fade-in)\n" +
                     "`/skip` — Skip to next song\n" +
@@ -26,7 +26,7 @@ export const helpCommand = {
                     "`/previous` — Replay previous song from history\n" +
                     "`/stop` — Clear queue and leave voice channel\n" +
                     "`/seek <time>` — Jump to timestamp (e.g. `1:45`)\n" +
-                    "`/volume <0-200>` — Fine volume adjustment\n" +
+                    "`/volume <0-100>` — Fine volume adjustment\n" +
                     "`/loop <mode>` — Set loop mode (off, track, queue)\n" +
                     "`/shuffle` — Randomize queue order\n" +
                     "`/autoplay [mode]` — Spotify-style infinite radio when queue ends\n" +
@@ -47,7 +47,7 @@ export const helpCommand = {
             },
             {
                 name: "💡 Audiophile Tip for Best Quality",
-                value: "Ask your server admin to edit your voice channel and drag the **Bitrate slider to the max** (up to 256k or 384k on boosted servers) to hear the full 300+ kbps master sound!",
+                value: "Ask your server admin to edit your voice channel and drag the **Bitrate slider to the max** (up to 256k or 384k on boosted servers) for the highest available Discord output bitrate!",
             },
         ])
             .setFooter({

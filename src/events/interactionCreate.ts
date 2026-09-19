@@ -1,3 +1,5 @@
+import { canSeek, parseSeek, seekToken } from "../utils/playback.js";
+import { purgeAutoplayTracks } from "../lavalink/client.js";
 import {
   ActionRowBuilder,
   ButtonInteraction,
@@ -97,6 +99,7 @@ async function handleSlashCommand(interaction: ChatInputCommandInteraction) {
 }
 
 async function handleButtonInteraction(interaction: ButtonInteraction) {
+  const [action, controlToken, direction] = interaction.customId.split(":");
   const player = lavalink.getPlayer(interaction.guildId!);
   if (!player) {
     return interaction.reply({
@@ -105,6 +108,10 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
     });
   }
 
+  const seekAction = action === "player_seek" || action === "player_seek_step";
+  if (seekAction && (!canSeek(player.queue.current) || controlToken !== seekToken(player))) {
+    return interaction.reply({ content: "This seek control has expired or this stream cannot be seeked. Use the current player card.", flags: MessageFlags.Ephemeral });
+  }
   // Voice Gate: strictly block anyone who is not in the same voice channel (allow passive inspection)
   const isPassiveInspection =
     interaction.customId === "player_queue" ||
@@ -126,7 +133,7 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
   // Acknowledge Discord immediately to eliminate the 3-second timeout ("didn't respond in time")
   if (interaction.customId === "player_queue" || interaction.customId === "player_lyrics") {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => { });
-  } else if (interaction.customId === "player_seek") {
+  } else if (action === "player_seek") {
     // showModal requires an un-deferred raw interaction
   } else {
     await interaction.deferUpdate().catch(() => { });
@@ -134,7 +141,7 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
 
   try {
     // Proactive Failover: If the player's node is disconnected or degraded, migrate to best healthy node before sending command
-    if (!player.node || !player.node.connected || !isNodeHealthy(player.node.id)) {
+    if (action !== "player_seek" && (!player.node || !player.node.connected || !isNodeHealthy(player.node.id))) {
       const bestId = getBestNode();
       const healthyNode = (bestId ? lavalink.nodeManager.nodes.get(bestId) : null) || Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected && isNodeHealthy(n.id));
       if (healthyNode && healthyNode.id !== player.node?.id) {
@@ -246,7 +253,19 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
       }
     }
 
-    switch (interaction.customId) {
+    if (seekAction && (controlToken !== seekToken(player) || !canSeek(player.queue.current))) {
+      const notice = { content: "The song changed. Use the current player card.", flags: MessageFlags.Ephemeral as const };
+      if (interaction.deferred) await interaction.followUp(notice);
+      else await interaction.reply(notice);
+      return;
+    }
+    switch (action) {
+      case "player_seek_step": {
+        const target = parseSeek(direction === "back" ? "-15" : "+15", player.position || 0, player.queue.current!.info.duration)!;
+        await player.seek(target);
+        await updateActivePlayerMessage(player, true);
+        return;
+      }
       case "player_pause_resume": {
         console.log(`[Button: Pause/Resume] BEFORE: paused=${player.paused} | Song: "${player.queue.current?.info.title}" | Pos: ${player.position}ms`);
         if (player.paused) {
@@ -266,7 +285,7 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
         const currentPos = player.position || 0;
         const duration = player.queue.current.info.duration || 0;
         const modal = new ModalBuilder()
-          .setCustomId("modal_player_seek")
+          .setCustomId(`modal_player_seek:${seekToken(player)}`)
           .setTitle("⏩ Jump to Track Timestamp");
 
         const input = new TextInputBuilder()
@@ -444,12 +463,6 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
       case "player_volup": {
         const newVol = Math.min(100, player.volume + 10);
         await player.setVolume(newVol);
-        if (newVol === 100) {
-          const activePreset = player.getData("filter_preset_key") as string | undefined;
-          if (!activePreset || activePreset === "reset") {
-            await clearAllFilters(player);
-          }
-        }
         await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
         break;
       }
@@ -460,7 +473,7 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
         if (isCurrentlyActive) {
           await clearAllFilters(player);
           await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
-          hifiNoticeText = "🔄 Equalizer reset to **Normal (Flat)** (pure lossless audio).";
+          hifiNoticeText = "🔄 Equalizer reset to **Normal (Flat)** (no EQ or effects).";
         } else {
           await clearAllFilters(player);
           player.setData("hifi_active", true);
@@ -545,6 +558,7 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
         const currentAutoplay = Boolean(player.getData("autoplay") ?? true);
         const newAutoplay = !currentAutoplay;
         player.setData("autoplay", newAutoplay);
+    if (!newAutoplay) purgeAutoplayTracks(player);
         await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
 
         const noticeText = newAutoplay
@@ -626,6 +640,18 @@ async function handleSelectMenuInteraction(interaction: StringSelectMenuInteract
       if (healthyNode && healthyNode.id !== player.node?.id) {
         await player.changeNode(healthyNode, false).catch(() => { });
       }
+    }
+
+    if (interaction.customId.startsWith("player_timeline:")) {
+      const token = interaction.customId.split(":")[1];
+      const target = Number(interaction.values[0]);
+      if (!canSeek(player.queue.current) || token !== seekToken(player) || !Number.isFinite(target) || target < 0 || target >= player.queue.current!.info.duration) {
+        await interaction.followUp({ content: "That timeline has expired. Use the current player card.", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      await player.seek(Math.min(target, player.queue.current!.info.duration - 1000));
+      await updateActivePlayerMessage(player, true);
+      return;
     }
 
     // Queue Manager: Switch selected track on current page
@@ -737,12 +763,12 @@ async function handleSelectMenuInteraction(interaction: StringSelectMenuInteract
       return;
     }
     console.error("[SelectMenu Interaction Error]:", err);
-    await interaction.followUp({ content: "⚠️ Filter could not be applied. Please try again.", flags: MessageFlags.Ephemeral }).catch(() => { });
+    await interaction.followUp({ content: "⚠️ The player action could not be completed. Please try again.", flags: MessageFlags.Ephemeral }).catch(() => { });
   }
 }
 
 async function handleModalSubmitInteraction(interaction: ModalSubmitInteraction) {
-  if (interaction.customId === "modal_player_seek") {
+  if (interaction.customId.startsWith("modal_player_seek")) {
     const player = lavalink.getPlayer(interaction.guildId!);
     if (!player || !player.queue.current) {
       return interaction.reply({ content: "❌ Nothing is currently playing.", flags: MessageFlags.Ephemeral }).catch(() => {});
@@ -755,47 +781,16 @@ async function handleModalSubmitInteraction(interaction: ModalSubmitInteraction)
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
 
-    const inputRaw = interaction.fields.getTextInputValue("seek_target").trim();
-    const duration = player.queue.current.info.duration || 0;
-    const currentPos = player.position || 0;
-    let targetMs = 0;
-
-    // Relative seek (+30, -15, +1:30)
-    if (inputRaw.startsWith("+") || inputRaw.startsWith("-")) {
-      const isPositive = inputRaw.startsWith("+");
-      const subStr = inputRaw.substring(1).replace(/s$/i, "").trim();
-      let deltaMs = 0;
-      if (subStr.includes(":")) {
-        const parts = subStr.split(":").map(Number);
-        if (parts.length === 2) deltaMs = (parts[0] * 60 + parts[1]) * 1000;
-        else if (parts.length === 3) deltaMs = (parts[0] * 3600 + parts[1] * 60 + parts[2]) * 1000;
-      } else {
-        deltaMs = parseFloat(subStr) * 1000;
-      }
-      if (isNaN(deltaMs)) {
-        return interaction.editReply({ content: "❌ Invalid relative seek format! Use e.g. `+30`, `-15`, `+1:30`." });
-      }
-      targetMs = isPositive ? currentPos + deltaMs : currentPos - deltaMs;
-    } else {
-      // Absolute seek (1:30, 02:45, or 90)
-      const cleanStr = inputRaw.replace(/s$/i, "").trim();
-      if (cleanStr.includes(":")) {
-        const parts = cleanStr.split(":").map(Number);
-        if (parts.some(isNaN)) {
-          return interaction.editReply({ content: "❌ Invalid time format! Use `MM:SS` (e.g. `1:30`) or `HH:MM:SS`." });
-        }
-        if (parts.length === 2) targetMs = (parts[0] * 60 + parts[1]) * 1000;
-        else if (parts.length === 3) targetMs = (parts[0] * 3600 + parts[1] * 60 + parts[2]) * 1000;
-      } else {
-        const sec = parseFloat(cleanStr);
-        if (isNaN(sec)) {
-          return interaction.editReply({ content: "❌ Invalid timestamp! Use `MM:SS` (e.g. `1:30`) or seconds (e.g. `90`)." });
-        }
-        targetMs = sec * 1000;
-      }
+    if (!canSeek(player.queue.current) || interaction.customId.split(":")[1] !== seekToken(player)) {
+      await interaction.editReply({ content: "The song changed or cannot be seeked. Open Seek again from the current player card." });
+      return;
     }
-
-    targetMs = Math.max(0, Math.min(targetMs, duration));
+    const duration = player.queue.current.info.duration;
+    const targetMs = parseSeek(interaction.fields.getTextInputValue("seek_target"), player.position || 0, duration);
+    if (targetMs === null) {
+      await interaction.editReply({ content: "Use a timestamp such as 1:30, 90, +30, or -15." });
+      return;
+    }
 
     await player.seek(targetMs);
     await updateActivePlayerMessage(player, true);

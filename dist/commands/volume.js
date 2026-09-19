@@ -1,5 +1,5 @@
 import { SlashCommandBuilder, } from "discord.js";
-import { clearAllFilters, lavalink, updateActivePlayerMessage, validateVoiceGate } from "../lavalink/client.js";
+import { lavalink, updateActivePlayerMessage, validateVoiceGate } from "../lavalink/client.js";
 import { autoDeleteReply } from "../utils/cleanup.js";
 export const volumeCommand = {
     data: new SlashCommandBuilder()
@@ -22,12 +22,6 @@ export const volumeCommand = {
         }
         const vol = interaction.options.getInteger("level", true);
         await player.setVolume(vol);
-        if (vol === 100) {
-            const activePreset = player.getData("filter_preset_key");
-            if (!activePreset || activePreset === "reset") {
-                await clearAllFilters(player);
-            }
-        }
         await updateActivePlayerMessage(player);
         let icon = "🔊";
         if (vol === 0)

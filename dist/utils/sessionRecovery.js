@@ -34,7 +34,7 @@ export function saveActiveSessions() {
                 guildId,
                 voiceChannelId: player.voiceChannelId,
                 textChannelId: player.textChannelId || undefined,
-                volume: player.volume || 100,
+                volume: player.volume ?? 100,
                 repeatMode: player.repeatMode || "off",
                 // Round position to nearest 5s to avoid disk churn on negligible timestamp delta
                 position: Math.round((player.position || 0) / 5000) * 5000,
@@ -147,7 +147,7 @@ export async function restoreSessions(client) {
                         textChannelId: session.textChannelId,
                         selfDeaf: true,
                         selfMute: false,
-                        volume: session.volume || 100,
+                        volume: session.volume ?? 100,
                         instaUpdateFiltersFix: true,
                         applyVolumeAsFilter: false,
                         ...(targetNode ? { node: targetNode } : {}),

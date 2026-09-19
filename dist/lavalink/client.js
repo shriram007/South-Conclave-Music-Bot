@@ -1,20 +1,23 @@
+import { resolveRecoveryTrack } from "../services/recovery.js";
+import { confirmedTrack, RecentFailures, withTimeout } from "../utils/playback.js";
+import { authorConfidence, hasUnrequestedVersion, sameRecording, rankSearchTracks } from "../utils/trackSelection.js";
 import { EmbedBuilder, } from "discord.js";
 import { LavalinkManager } from "lavalink-client";
 import { config } from "../config.js";
 import { buildPlayerMessage } from "./playerUI.js";
 import { autoDeleteMessage } from "../utils/cleanup.js";
-import { detectTrackLanguage, getChannelBitrateInfo, isLanguageCompatible, isRelevantTrack, parseTrackTitle } from "../utils/formatters.js";
+import { detectTrackLanguage, getChannelBitrateInfo, isLanguageCompatible, parseTrackTitle } from "../utils/formatters.js";
 import { is247Enabled } from "../utils/twentyFourSeven.js";
 import { clearGuildSession, saveActiveSessions } from "../utils/sessionRecovery.js";
 import { applyLoudnessNormalization } from "../commands/normalize.js";
-import { findJioSaavnAutoplay, loadJioSaavnAsLavalinkTrack, resolveJioSaavnTrack } from "../services/jiosaavn.js";
+import { findJioSaavnAutoplay, loadJioSaavnAsLavalinkTrack } from "../services/jiosaavn.js";
 export let lavalink;
 export let discordClient;
 // Track active player messages so we can update or clean them up
 export const activePlayerMessages = new Map(); // guildId -> messageId
 export const playerMessageCache = new Map(); // guildId -> Message object (fast direct edit)
-// Global cache of stream-restricted / login-required video IDs so we never re-select or loop on them
-export const restrictedTrackIds = new Set();
+// Short cooldown for failed recordings; provider restrictions may be temporary.
+export const restrictedTrackIds = new RecentFailures();
 // Dynamic node health & circuit breaker: tracks nodes returning 502/HTML errors or timeouts
 export const degradedNodes = new Map(); // nodeId -> expiry timestamp
 export function markNodeDegraded(nodeId, durationMs = 180000) {
@@ -32,7 +35,7 @@ export function isNodeHealthy(nodeId) {
     return false;
 }
 /**
- * Completely disables all DSP filters and equalizers, guaranteeing 100% bit-perfect PCM passthrough
+ * Disables DSP filters and EQ. Discord output may still be transcoded by the node.
  */
 export async function clearAllFilters(player) {
     if (!player)
@@ -62,19 +65,12 @@ export async function autoMaximizeVoiceChannelBitrate(voiceChannel) {
     if (!voiceChannel)
         return;
     try {
-        const tier = voiceChannel.guild.premiumTier;
-        let maxBitrate = 96000;
-        if (tier === 1)
-            maxBitrate = 128000;
-        if (tier === 2)
-            maxBitrate = 256000;
-        if (tier === 3)
-            maxBitrate = 384000;
+        const maxBitrate = voiceChannel.guild.maximumBitrate;
         if (voiceChannel.bitrate < maxBitrate) {
             const botMember = voiceChannel.guild.members.me;
-            if (botMember?.permissions.has("ManageChannels")) {
-                await voiceChannel.setBitrate(maxBitrate, "South Conclave Audiophile Auto-Optimization").catch(() => { });
-                console.log(`[Audio Quality] Auto-maximized voice channel "${voiceChannel.name}" to ${Math.round(maxBitrate / 1000)} kbps (Tier ${tier} Peak)!`);
+            if (botMember && voiceChannel.permissionsFor(botMember)?.has("ManageChannels")) {
+                await voiceChannel.setBitrate(maxBitrate, "Music playback: use available channel bitrate");
+                console.log(`[Audio Quality] Auto-maximized voice channel "${voiceChannel.name}" to ${Math.round(maxBitrate / 1000)} kbps.`);
             }
         }
     }
@@ -92,11 +88,11 @@ export function isSameSongOrJunk(candidateTitle, previousTracks) {
             .replace(/ft\..*/g, "")
             .replace(/remix.*/g, "")
             .replace(/version.*/g, "")
-            .replace(/[^a-z0-9]/g, "");
+            .replace(/[^\p{L}\p{M}\p{N}]/gu, "");
     };
     const lowTitle = candidateTitle.toLowerCase();
     const junkKeywords = ["karaoke", "instrumental", "tutorial", "tribute", "how to play", "synthesia", "cover", "bass boosted"];
-    if (junkKeywords.some((j) => lowTitle.includes(j)))
+    if (hasUnrequestedVersion(candidateTitle) || junkKeywords.some((j) => lowTitle.includes(j)))
         return true;
     const candSimp = simplify(candidateTitle);
     if (!candSimp)
@@ -113,17 +109,31 @@ export function isSameSongOrJunk(candidateTitle, previousTracks) {
 /**
  * Spotify/FlaviBot-Grade Recommendation Engine:
  * Generates acoustic neural radio seeds (RD<videoId>), diversifies by 80% same genre/vibe from other artists,
- * and upgrades every candidate to official 256kbps YouTube Music studio masters.
+ * and checks catalog candidates against song identity before replacing an upload.
  */
-export async function findAutoplayRecommendation(player, seedTrack) {
+const recommendationJobs = new WeakMap();
+export function findAutoplayRecommendation(player, seedTrack) {
+    const pending = recommendationJobs.get(player);
+    if (pending?.seed === seedTrack)
+        return pending.job;
+    const job = discoverAutoplayRecommendation(player, seedTrack).finally(() => {
+        if (recommendationJobs.get(player)?.job === job)
+            recommendationJobs.delete(player);
+    });
+    recommendationJobs.set(player, { seed: seedTrack, job });
+    return job;
+}
+async function discoverAutoplayRecommendation(player, seedTrack) {
     const rawTitle = seedTrack.info.title || "";
     const rawAuthor = (seedTrack.info.author || "").replace(/- Topic/gi, "").trim();
     const parsedSeed = parseTrackTitle(rawTitle, rawAuthor);
     const cleanTitle = parsedSeed.songTitle || rawTitle;
     const fullSeedQuery = parsedSeed.fullSearchQuery || `${cleanTitle} ${rawAuthor}`.trim();
-    const effectiveArtist = parsedSeed.artist || rawAuthor;
+    const effectiveArtist = parsedSeed.artist;
     const videoId = seedTrack.info.identifier;
-    const seedLang = detectTrackLanguage(rawTitle, rawAuthor);
+    const declaredLanguage = seedTrack.userData?.language;
+    const seedLang = ["tamil", "telugu", "malayalam", "kannada", "hindi", "punjabi", "english", "korean", "japanese"].includes(declaredLanguage)
+        ? declaredLanguage : detectTrackLanguage(rawTitle, rawAuthor);
     console.log(`[Smart Autoplay] Finding AI radio recommendations based on "${cleanTitle}" by "${effectiveArtist}" (Language: ${seedLang.toUpperCase()})...`);
     const connectedNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected);
     const healthyNodes = connectedNodes.filter((n) => isNodeHealthy(n.id));
@@ -146,6 +156,11 @@ export async function findAutoplayRecommendation(player, seedTrack) {
         if (t.info.identifier)
             historyIds.add(t.info.identifier);
     }
+    for (const t of [seedTrack, ...player.queue.previous, ...player.queue.tracks]) {
+        const jioId = t.userData?.jioId;
+        if (jioId)
+            historyIds.add(jioId);
+    }
     let foundCandidate = null;
     const isJioSeed = Boolean(seedTrack.userData?.isJioSaavn) || seedTrack.info.sourceName === "jiosaavn";
     const previousTitles = [
@@ -157,9 +172,9 @@ export async function findAutoplayRecommendation(player, seedTrack) {
         ...player.queue.tracks.map((t) => t.info?.title).filter(Boolean),
     ];
     // Strategy 0: If current playing track came from JioSaavn (/jio), keep streaming pristine 320k JioSaavn Studio Radio!
-    if (isJioSeed && ["tamil", "telugu", "malayalam", "hindi", "punjabi"].includes(seedLang)) {
+    if (isJioSeed) {
         try {
-            const jioAuto = await findJioSaavnAutoplay(fullSeedQuery, effectiveArtist, seedLang, historyIds, previousTitles);
+            const jioAuto = await findJioSaavnAutoplay(cleanTitle, effectiveArtist, seedLang, historyIds, previousTitles);
             if (jioAuto) {
                 const allPrev = [...player.queue.previous, ...(player.queue.current ? [player.queue.current] : [])];
                 if (isSameSongOrJunk(jioAuto.title, allPrev)) {
@@ -185,6 +200,9 @@ export async function findAutoplayRecommendation(player, seedTrack) {
             console.warn("[Smart Autoplay] JioSaavn discovery notice:", e);
         }
     }
+    // A /jio radio session stays in the requested catalog when discovery is exhausted.
+    if (isJioSeed)
+        return null;
     // Strategy 1: YouTube Music Native Algorithmic Radio Mix (25 AI-curated related tracks via RD<videoId>)
     if (videoId && /^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
         const radioUrl = `https://www.youtube.com/watch?v=${videoId}&list=RD${videoId}`;
@@ -203,26 +221,10 @@ export async function findAutoplayRecommendation(player, seedTrack) {
                     if (validCandidates.length > 0) {
                         // Prioritize candidates with the EXACT same language (e.g. Tamil -> Tamil)
                         const exactLangCandidates = validCandidates.filter((t) => detectTrackLanguage(t.info.title, t.info.author || "") === seedLang);
-                        const candidatePool = exactLangCandidates.length > 0 ? exactLangCandidates : validCandidates;
-                        const cleanCurrentAuthor = rawAuthor.toLowerCase();
-                        const otherArtistCandidates = candidatePool.filter((t) => {
-                            const tAuthor = (t.info?.author || "").toLowerCase();
-                            return !tAuthor.includes(cleanCurrentAuthor) && !cleanCurrentAuthor.includes(tAuthor);
-                        });
-                        const sameArtistCandidates = candidatePool.filter((t) => {
-                            const tAuthor = (t.info?.author || "").toLowerCase();
-                            return tAuthor.includes(cleanCurrentAuthor) || cleanCurrentAuthor.includes(tAuthor);
-                        });
-                        // Vibe selection policy: 80% other artists in same language/vibe, 20% same artist
-                        let candidate;
-                        if (otherArtistCandidates.length > 0 && Math.random() < 0.80) {
-                            candidate = otherArtistCandidates[Math.floor(Math.random() * Math.min(4, otherArtistCandidates.length))];
-                            if (candidate)
-                                console.log(`[Smart Autoplay] Language match (${seedLang}): "${candidate.info.title}" by "${candidate.info.author}"`);
-                        }
-                        else {
-                            candidate = sameArtistCandidates[0] || otherArtistCandidates[0] || candidatePool[0];
-                        }
+                        const candidatePool = (exactLangCandidates.length > 0 ? exactLangCandidates : validCandidates)
+                            .sort((a, b) => authorConfidence(b.info.author) - authorConfidence(a.info.author));
+                        // Provider order breaks ties; upload reputation takes priority over random diversity.
+                        const candidate = candidatePool[0];
                         if (candidate) {
                             foundCandidate = candidate;
                             break;
@@ -256,7 +258,7 @@ export async function findAutoplayRecommendation(player, seedTrack) {
                     const timeoutPromise = new Promise((r) => setTimeout(() => r(null), 3500));
                     const recRes = await Promise.race([searchPromise, timeoutPromise]);
                     if (recRes?.tracks?.length && recRes.loadType !== "empty" && recRes.loadType !== "error") {
-                        const candidate = recRes.tracks.find((t) => !historyIds.has(t.info.identifier) &&
+                        const candidate = [...recRes.tracks].sort((a, b) => authorConfidence(b.info.author) - authorConfidence(a.info.author)).find((t) => !historyIds.has(t.info.identifier) &&
                             !restrictedTrackIds.has(t.info.identifier) &&
                             !isSameSongOrJunk(t.info.title, [...player.queue.previous, ...(player.queue.current ? [player.queue.current] : [])]) &&
                             (t.info.duration || 0) >= 60000 &&
@@ -280,7 +282,7 @@ export async function findAutoplayRecommendation(player, seedTrack) {
     // Strategy 3: JioSaavn 320 kbps Autoplay Discovery (unrestricted, authentic 320 kbps studio audio)
     if (!foundCandidate) {
         try {
-            const jioRec = await findJioSaavnAutoplay(fullSeedQuery, effectiveArtist, seedLang, historyIds, previousTitles);
+            const jioRec = await findJioSaavnAutoplay(cleanTitle, effectiveArtist, seedLang, historyIds, previousTitles);
             if (jioRec) {
                 const allPrev = [...player.queue.previous, ...(player.queue.current ? [player.queue.current] : [])];
                 if (!isSameSongOrJunk(jioRec.title, allPrev)) {
@@ -301,7 +303,7 @@ export async function findAutoplayRecommendation(player, seedTrack) {
     }
     if (!foundCandidate)
         return null;
-    // Guarantee official 256kbps YouTube Music Studio Master fidelity for non-Jio tracks
+    // Prefer matching catalog recordings; search results do not report source bitrate.
     let studioMasterTrack = foundCandidate;
     const isJio = Boolean(foundCandidate.userData?.isJioSaavn);
     const hqSearchNode = kasawaNode || milloNode || nodesToTry[0];
@@ -313,16 +315,13 @@ export async function findAutoplayRecommendation(player, seedTrack) {
                 query: hqQuery,
                 source: "ytmsearch",
             }, seedTrack.requester).catch(() => null);
-            if (hqRes?.tracks?.length && !restrictedTrackIds.has(hqRes.tracks[0].info.identifier)) {
-                const candidateMaster = hqRes.tracks[0];
-                // CRITICAL: Ensure upgraded track actually matches the candidate song title, NOT a different song from the same album!
-                if (isRelevantTrack(candidateMaster.info.title, parsedCandidate.songTitle, 0.60)) {
-                    console.log(`[Smart Autoplay] Upgraded "${foundCandidate.info.title}" to official 256kbps YouTube Music master: "${candidateMaster.info.title}" via ${hqSearchNode.id}`);
-                    studioMasterTrack = candidateMaster;
-                }
-                else {
-                    console.log(`[Smart Autoplay] Kept authentic candidate "${foundCandidate.info.title}" (studio master returned mismatched "${candidateMaster.info.title}")`);
-                }
+            const masters = rankSearchTracks(hqRes?.tracks || [], parsedCandidate.songTitle)
+                .filter(t => !restrictedTrackIds.has(t.info.identifier) && sameRecording(t.info, foundCandidate.info));
+            const candidateMaster = masters[0];
+            if (candidateMaster && authorConfidence(candidateMaster.info.author) >= authorConfidence(foundCandidate.info.author)) {
+                studioMasterTrack = candidateMaster;
+                studioMasterTrack.userData = { ...studioMasterTrack.userData, searchSource: "ytmsearch" };
+                console.log(`[Smart Autoplay] Matched catalog recording: "${candidateMaster.info.title}" by "${candidateMaster.info.author}"`);
             }
         }
         catch (e) {
@@ -337,7 +336,7 @@ export async function findAutoplayRecommendation(player, seedTrack) {
 }
 /**
  * Pre-fetches the next autoplay recommendation in the background while the current track is playing.
- * Enables zero-buffer (< 50ms) gapless transitions just like Spotify!
+ * Resolves metadata ahead of time; the audio node still needs to open the stream.
  */
 export async function prefetchAutoplayTrack(player) {
     const isAutoplay = Boolean(player.getData("autoplay") ?? true);
@@ -359,6 +358,7 @@ export async function prefetchAutoplayTrack(player) {
     const seed = player.queue.current || player.queue.previous[0];
     if (!seed)
         return;
+    const generation = player.getData("playback_generation");
     player.setData("prefetching_autoplay", true);
     try {
         const track = await findAutoplayRecommendation(player, seed);
@@ -366,7 +366,7 @@ export async function prefetchAutoplayTrack(player) {
             const isAuto = t.requester?.displayName === "📻 Autoplay Radio" || t.requester?.username === "Autoplay Radio" || t.userData?.isAutoplay;
             return !isAuto;
         });
-        if (track && currentUserTracks.length === 0 && player.queue.tracks.length === 0) {
+        if (track && lavalink.getPlayer(player.guildId) === player && (player.getData("autoplay") ?? true) && !player.getData("recovering_track") && player.getData("playback_generation") === generation && player.queue.current === seed && currentUserTracks.length === 0 && player.queue.tracks.length === 0) {
             await player.queue.add(track);
             console.log(`[Smart Autoplay] Pre-fetched "${track.info.title}" by "${track.info.author}" for zero-buffer gapless transition.`);
         }
@@ -382,6 +382,7 @@ export async function prefetchAutoplayTrack(player) {
  * Removes any pre-fetched autoplay tracks in-place from the queue so user-queued tracks take 100% priority
  */
 export function purgeAutoplayTracks(player) {
+    player.setData("playback_generation", Number(player.getData("playback_generation") || 0) + 1);
     for (let i = player.queue.tracks.length - 1; i >= 0; i--) {
         const t = player.queue.tracks[i];
         const isAuto = t.requester?.displayName === "📻 Autoplay Radio" || t.requester?.username === "Autoplay Radio" || t.userData?.isAutoplay;
@@ -392,9 +393,7 @@ export function purgeAutoplayTracks(player) {
 }
 export function getMasterNodeConfigs() {
     const configs = [];
-    if (config.lavalink.host &&
-        config.lavalink.host !== "localhost" &&
-        !config.lavalink.host.includes("jirayu")) {
+    if (process.env.LAVALINK_HOST) {
         configs.push({
             authorization: config.lavalink.password,
             host: config.lavalink.host,
@@ -408,6 +407,8 @@ export function getMasterNodeConfigs() {
             enablePingOnStatsCheck: true,
         });
     }
+    if (!config.lavalink.publicFallbacks)
+        return configs;
     // Priority 1: Kasawa-MasterNode (verified online, supports direct HTTP 320k JioSaavn streaming, YT, Spotify, SoundCloud)
     configs.push({
         authorization: "youshallnotpass",
@@ -479,7 +480,7 @@ export async function ensureNodesHealthy() {
         else if (!existingNode.connected && !existingNode.isNodeReconnecting) {
             console.log(`[Self-Healing Watchdog] Triggering connect for idle disconnected node "${existingNode.id}"...`);
             try {
-                existingNode.connect();
+                await existingNode.connect();
             }
             catch (err) {
                 console.warn(`[Self-Healing Watchdog] Failed connecting "${existingNode.id}":`, err?.message || err);
@@ -503,7 +504,7 @@ export function initLavalink(client) {
         autoSkipOnResolveError: true,
         playerOptions: {
             clientBasedPositionUpdateInterval: 150, // 150ms position accuracy for ultra-smooth timestamps
-            defaultSearchPlatform: "ytmsearch", // YouTube Music HQ 256k as default
+            defaultSearchPlatform: "ytmsearch", // Prefer YouTube Music catalog search
             volumeDecrementer: 1,
             maxErrorsPerTime: {
                 threshold: 60000,
@@ -569,8 +570,8 @@ export function initLavalink(client) {
                     if (nextTrack && nextTrack.info.identifier !== preloadedTrackId) {
                         preloadedTrackId = nextTrack.info.identifier || null;
                         if (typeof nextTrack.resolve === "function") {
-                            console.log(`[Gapless Preloader] Preloading next track "${nextTrack.info.title}" for 0ms transition...`);
-                            nextTrack.resolve(lavalink).catch(() => { });
+                            console.log(`[Gapless Preloader] Preloading next track "${nextTrack.info.title}" ahead of transition...`);
+                            nextTrack.resolve(player).catch(() => { });
                         }
                     }
                 }
@@ -600,7 +601,31 @@ export function initLavalink(client) {
         }
     });
     const trackStartLocks = new Set();
-    lavalink.on("trackStart", async (player, track) => {
+    lavalink.on("trackStart", async (player, track, payload) => {
+        const requestedVideoId = track?.userData?.requestedVideoId;
+        const actual = confirmedTrack(lavalink, track, payload);
+        if (actual && actual !== track) {
+            // An older start event can arrive after a newer play request. Verify the
+            // node's live state before changing queue metadata or pausing any audio.
+            const generation = player.getData("playback_generation");
+            const snapshot = player.queue.current;
+            const node = player.node;
+            const live = await withTimeout(node.fetchPlayer(player.guildId), 2500).catch(() => null);
+            if (!live || !("track" in live) || !live.track || live.track.encoded !== actual.encoded || player.queue.current !== snapshot || player.node !== node || player.getData("playback_generation") !== generation)
+                return;
+            console.warn(`[Playback Identity] Node confirmed a different recording than the queue in guild ${player.guildId}; correcting metadata.`);
+            player.queue.current = actual;
+            track = actual;
+        }
+        player.setData("track_epoch", Number(player.getData("track_epoch") || 0) + 1);
+        player.setData("playback_generation", Number(player.getData("playback_generation") || 0) + 1);
+        if (requestedVideoId && actual?.info.identifier !== requestedVideoId) {
+            const paused = await player.pause().then(() => true, err => { console.warn("[Playback Identity] Failed to pause mismatched video:", err); return false; });
+            if (player.textChannelId) {
+                const channel = client.channels.cache.get(player.textChannelId);
+                channel?.send(paused ? "⚠️ The audio node started a different video than the requested link. Playback has been paused. Please retry the link or choose another source." : "⚠️ The audio node started a different video and did not accept the pause request. Use Stop and reconnect before retrying.").then(m => autoDeleteMessage(m, 12000)).catch(() => { });
+            }
+        }
         if (!player.textChannelId || !track)
             return;
         const channel = (client.channels.cache.get(player.textChannelId) ||
@@ -624,7 +649,7 @@ export function initLavalink(client) {
                 return;
             }
             player.setData("active_track_uri", track.info.uri);
-            const playerMsgOptions = buildPlayerMessage(player, track);
+            const playerMsgOptions = () => buildPlayerMessage(player);
             // Clean up previous Now Playing card so the new song gets a fresh announcement card at the bottom
             if (prevMessageId) {
                 try {
@@ -647,7 +672,9 @@ export function initLavalink(client) {
             }
             catch { }
             // Always send a fresh, prominent Now Playing card at the bottom of the chat for new songs
-            const sentMsg = await channel.send(playerMsgOptions);
+            if (!player.queue.current || lavalink.getPlayer(player.guildId) !== player)
+                return;
+            const sentMsg = await channel.send(playerMsgOptions());
             activePlayerMessages.set(player.guildId, sentMsg.id);
             playerMessageCache.set(player.guildId, sentMsg);
             player.setData("active_message_id", sentMsg.id);
@@ -674,7 +701,7 @@ export function initLavalink(client) {
             }
             // Pre-fetch next autoplay recommendation in background only when queue has NO user tracks
             setTimeout(() => {
-                const isAutoplay = Boolean(player.getData("autoplay") ?? true);
+                const isAutoplay = !player.paused && Boolean(player.getData("autoplay") ?? true);
                 const userTracks = player.queue.tracks.filter((t) => {
                     const isAuto = t.requester?.displayName === "📻 Autoplay Radio" || t.requester?.username === "Autoplay Radio" || t.userData?.isAutoplay;
                     return !isAuto;
@@ -693,6 +720,9 @@ export function initLavalink(client) {
     });
     lavalink.on("queueEnd", async (player) => {
         stopLivePlayerTicker(player.guildId);
+        if (player.getData("recovering_track"))
+            return;
+        const generation = player.getData("playback_generation");
         if (!player.textChannelId)
             return;
         const channel = client.channels.cache.get(player.textChannelId);
@@ -704,7 +734,7 @@ export function initLavalink(client) {
             const lastTrack = player.queue.previous[0];
             const recommendedTrack = await findAutoplayRecommendation(player, lastTrack);
             if (recommendedTrack) {
-                if (player.queue.tracks.length > 0)
+                if (lavalink.getPlayer(player.guildId) !== player || player.queue.current || player.playing || player.queue.tracks.length > 0 || !(player.getData("autoplay") ?? true) || player.getData("playback_generation") !== generation)
                     return;
                 await player.queue.add(recommendedTrack);
                 await player.play();
@@ -716,6 +746,8 @@ export function initLavalink(client) {
                 return;
             }
         }
+        if (player.queue.current || player.queue.tracks.length || player.getData("playback_generation") !== generation)
+            return;
         if (channel) {
             const is247 = is247Enabled(player.guildId);
             const prevMessageId = activePlayerMessages.get(player.guildId) || player.getData("active_message_id");
@@ -762,32 +794,20 @@ export function initLavalink(client) {
     });
     lavalink.on("playerDestroy", (player) => {
         stopLivePlayerTicker(player.guildId);
+        clearUpdaterState(player.guildId);
         activePlayerMessages.delete(player.guildId);
         playerMessageCache.delete(player.guildId);
         clearGuildSession(player.guildId);
-        clearUpdaterState(player.guildId);
     });
     lavalink.on("trackStuck", async (player, track, payload) => {
         console.warn(`[Lavalink] Audio stream stuck for "${track?.info.title}" (${payload.thresholdMs}ms threshold). Handling recovery...`);
-        // 1. If this node stalled on the audio stream, mark it degraded for 60 seconds
-        if (player.node?.id && player.node.id !== "Kasawa-MasterNode") {
+        if (player.node?.id)
             markNodeDegraded(player.node.id, 60000);
-        }
-        // 2. Proactively re-align player to Kasawa-MasterNode if available and healthy
-        const kasawa = lavalink.nodeManager.nodes.get("Kasawa-MasterNode");
-        if (kasawa?.connected && player.node?.id !== "Kasawa-MasterNode" && isNodeHealthy("Kasawa-MasterNode")) {
-            console.log(`[Lavalink] Migrating stuck player from ${player.node?.id} back to "Kasawa-MasterNode"...`);
-            await player.changeNode(kasawa, false).catch(() => { });
-        }
-        if (player.textChannelId) {
-            const channel = client.channels.cache.get(player.textChannelId);
-            channel?.send({
-                content: `⚠️ Audio stream stalled for **${track?.info.title || "track"}**. Skipping ahead smoothly...`,
-            }).then((msg) => autoDeleteMessage(msg, 6000)).catch(() => { });
-        }
-        await player.skip().catch(() => { });
+        // lavalink-client advances the queue after emitting this event.
     });
     lavalink.on("trackError", async (player, track, payload) => {
+        if (payload?.track?.encoded && track?.encoded && payload.track.encoded !== track.encoded)
+            return;
         const errorMsg = payload?.exception?.message || JSON.stringify(payload);
         console.error(`[Lavalink] Error playing "${track?.info.title}":`, errorMsg);
         const isNodeNetworkDown = errorMsg.includes("Unexpected token '<'") ||
@@ -797,19 +817,17 @@ export function initLavalink(client) {
             errorMsg.includes("ConnectTimeoutError") ||
             errorMsg.includes("fetch failed");
         // Only mark node degraded for genuine network outages, NOT track-specific video restrictions!
-        if (isNodeNetworkDown && player.node?.id !== "Kasawa-MasterNode") {
+        if (isNodeNetworkDown && player.node?.id) {
             console.warn(`[Node Circuit Breaker] Node "${player.node?.id}" network drop. Marking degraded for 60s.`);
             markNodeDegraded(player.node.id, 60000);
         }
-        if (!track)
+        if (!track || player.getData("recovering_track"))
             return;
+        const failedPosition = player.position || 0;
+        const generation = player.getData("playback_generation");
+        const recoveryIsCurrent = () => lavalink.getPlayer(player.guildId) === player && player.getData("playback_generation") === generation && (!player.queue.current || player.queue.current === track);
         // Cache the failed track ID so we never retry or loop on a broken YouTube video
         if (track.info.identifier) {
-            if (restrictedTrackIds.size >= 500) {
-                const oldest = restrictedTrackIds.values().next().value;
-                if (oldest)
-                    restrictedTrackIds.delete(oldest);
-            }
             restrictedTrackIds.add(track.info.identifier);
         }
         // If single track loop is active, disable it to prevent an infinite error loop on this failing song
@@ -817,9 +835,8 @@ export function initLavalink(client) {
             console.warn(`[Universal Recovery] Disabling track loop because "${track?.info.title}" failed to stream.`);
             await player.setRepeatMode("off").catch(() => { });
         }
-        const failedId = track.info.identifier;
         const rawTitle = track.info.title || "";
-        const recoveryAttempts = (player.getData("recovery_attempts") || 0) + 1;
+        const recoveryAttempts = Number(track.userData?.recoveryAttempts || 0) + 1;
         player.setData("recovery_attempts", recoveryAttempts);
         // Circuit breaker: prevent infinite retry loops if all sources fail
         if (recoveryAttempts > 2) {
@@ -828,169 +845,22 @@ export function initLavalink(client) {
             player.setData("recovering_track", false);
             if (player.textChannelId) {
                 const channel = client.channels.cache.get(player.textChannelId);
-                channel?.send(`⚠️ **Stream Restricted by Provider:** Video stream for **${rawTitle}** requires authorization. Skipping forward...`).then((msg) => autoDeleteMessage(msg, 7000)).catch(() => { });
+                channel?.send(`⚠️ **Playback unavailable:** Recovery attempts for **${rawTitle}** were exhausted.`).then((msg) => autoDeleteMessage(msg, 7000)).catch(() => { });
             }
-            await player.skip().catch(() => { });
             return;
         }
         // Universal Auto-Recovery for blocked/age-gated/login-required/broken streams
         if (!player.getData("recovering_track")) {
             try {
                 player.setData("recovering_track", true);
-                const parsedFailed = parseTrackTitle(rawTitle, track.info.author || "");
-                const cleanTitle = parsedFailed.songTitle || rawTitle;
-                const fallbackQuery = parsedFailed.fullSearchQuery || `${cleanTitle} ${track.info.author || ""}`.trim();
-                console.log(`[Universal Recovery] Stream restricted for "${rawTitle}" (ID: ${failedId}). Attempt #${recoveryAttempts} auto-recovering as "${fallbackQuery}"...`);
-                // Prioritize healthy alternate nodes over the node that just failed
-                const connectedNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected && !n.id.includes("Custom"));
-                const healthyOtherNodes = connectedNodes.filter((n) => isNodeHealthy(n.id) && n.id !== player.node.id);
-                const kasawaNode = healthyOtherNodes.find((n) => n.id === "Kasawa-MasterNode");
-                const milloNode = healthyOtherNodes.find((n) => n.id === "Millo-BackupNode");
-                const serenetiaNode = healthyOtherNodes.find((n) => n.id === "Serenetia-AuxNode");
-                const otherHealthy = healthyOtherNodes.filter((n) => n.id !== "Kasawa-MasterNode" && n.id !== "Millo-BackupNode" && n.id !== "Serenetia-AuxNode");
-                const degradedList = connectedNodes.filter((n) => !isNodeHealthy(n.id) && n.id !== player.node.id);
-                const nodesToTry = [
-                    ...(kasawaNode ? [kasawaNode] : []),
-                    ...(milloNode ? [milloNode] : []),
-                    ...(serenetiaNode ? [serenetiaNode] : []),
-                    ...otherHealthy,
-                    ...degradedList,
-                    player.node, // current failing node is only last resort
-                ];
-                let recoveredTrack = null;
-                let targetNode = player.node;
-                // ── TIER 0: JioSaavn 320 kbps Studio Audio Recovery (<500ms) ──
-                // Completely circumvents YouTube datacenter 403 / IP rate limits and streams bit-perfect 320 kbps AAC audio!
-                try {
-                    const jioMatch = await resolveJioSaavnTrack(fallbackQuery, parsedFailed.artist || track.info.author || "");
-                    if (jioMatch) {
-                        const jioLoaded = await loadJioSaavnAsLavalinkTrack(jioMatch, track.requester, [
-                            player.node,
-                            ...(kasawaNode ? [kasawaNode] : []),
-                            ...nodesToTry,
-                        ]);
-                        if (jioLoaded) {
-                            recoveredTrack = jioLoaded.track;
-                            targetNode = jioLoaded.node;
-                            console.log(`[Universal Recovery] Recovered "${rawTitle}" via JioSaavn 320kbps Studio Master on node "${targetNode.id}"`);
-                        }
-                    }
-                }
-                catch (err) {
-                    console.warn("[Universal Recovery] JioSaavn recovery attempt error:", err);
-                }
-                // On attempt #2+, prioritize SoundCloud to bypass YouTube datacenter IP blocks completely
-                const trySoundCloudFirst = recoveryAttempts > 1;
-                // ── FAST PATH: try the same track URL on a different healthy node (~500ms) ──
-                // This is the fastest recovery — no search needed, just re-resolve on a clean IP.
-                const fastNodes = [
-                    ...(kasawaNode ? [kasawaNode] : []),
-                    ...(milloNode ? [milloNode] : []),
-                    ...(serenetiaNode ? [serenetiaNode] : []),
-                ];
-                if (!recoveredTrack && track.info.uri && fastNodes.length > 0 && !trySoundCloudFirst) {
-                    for (const node of fastNodes) {
-                        try {
-                            const directRes = await Promise.race([
-                                node.search({ query: track.info.uri }, track.requester),
-                                new Promise((r) => setTimeout(() => r(null), 2000)),
-                            ]);
-                            const directTrack = directRes?.tracks?.find((t) => !restrictedTrackIds.has(t.info.identifier));
-                            if (directTrack) {
-                                recoveredTrack = directTrack;
-                                targetNode = node;
-                                console.log(`[Universal Recovery] Fast-path: re-resolved same track on node "${node.id}" in <2s`);
-                                break;
-                            }
-                        }
-                        catch { /* try next */ }
-                    }
-                }
-                // ───────────────────────────────────────────────────────────────────────
-                // FULL SEARCH PATH: race all candidate nodes in parallel for ~1s resolution
-                if (!recoveredTrack) {
-                    // On attempt #2+, immediately prioritize SoundCloud to bypass YouTube datacenter IP blocks completely
-                    const searchSource = trySoundCloudFirst ? "scsearch" : "ytmsearch";
-                    const searchQuery = trySoundCloudFirst ? fallbackQuery : `${cleanTitle} audio`;
-                    // Race all nodes simultaneously — fastest response wins
-                    const raceResults = await Promise.allSettled(nodesToTry.slice(0, 3).map(async (node) => {
-                        const res = await Promise.race([
-                            node.search({ query: searchQuery, source: searchSource }, track.requester),
-                            new Promise((r) => setTimeout(() => r(null), 3000)),
-                        ]);
-                        const candidate = res?.tracks?.find((t) => t.info.identifier !== failedId &&
-                            !restrictedTrackIds.has(t.info.identifier) &&
-                            isRelevantTrack(t.info.title, cleanTitle));
-                        if (!candidate)
-                            throw new Error("no candidate");
-                        return { track: candidate, node };
-                    }));
-                    for (const result of raceResults) {
-                        if (result.status === "fulfilled") {
-                            recoveredTrack = result.value.track;
-                            targetNode = result.value.node;
-                            console.log(`[Universal Recovery] Found alternative on node "${targetNode.id}": "${recoveredTrack?.info.title}"`);
-                            break;
-                        }
-                    }
-                }
-                // SEQUENTIAL FALLBACK: slower but exhaustive — only runs if parallel race failed
-                if (!recoveredTrack) {
-                    for (const node of nodesToTry) {
-                        try {
-                            if (trySoundCloudFirst) {
-                                const scRes = await node.search({ query: fallbackQuery, source: "scsearch" }, track.requester);
-                                if (scRes?.tracks?.length && scRes.loadType !== "empty" && scRes.loadType !== "error") {
-                                    const scCandidate = scRes.tracks.find((t) => t.info.identifier !== failedId &&
-                                        !restrictedTrackIds.has(t.info.identifier) &&
-                                        isRelevantTrack(t.info.title, cleanTitle));
-                                    if (scCandidate) {
-                                        recoveredTrack = scCandidate;
-                                        targetNode = node;
-                                        console.log(`[Universal Recovery] Found verified SoundCloud alternative on node "${node.id}": "${scCandidate.info.title}"`);
-                                        break;
-                                    }
-                                }
-                            }
-                            let ytRes = await node.search({ query: `${cleanTitle} audio`, source: "ytmsearch" }, track.requester);
-                            if (!ytRes?.tracks?.length || ytRes.loadType === "empty" || ytRes.loadType === "error") {
-                                ytRes = await node.search({ query: `${cleanTitle} lyrical`, source: "ytsearch" }, track.requester);
-                            }
-                            if (ytRes?.tracks?.length) {
-                                const ytCandidate = ytRes.tracks.find((t) => t.info.identifier !== failedId &&
-                                    !restrictedTrackIds.has(t.info.identifier) &&
-                                    isRelevantTrack(t.info.title, cleanTitle));
-                                if (ytCandidate) {
-                                    recoveredTrack = ytCandidate;
-                                    targetNode = node;
-                                    console.log(`[Universal Recovery] Found authentic alternative YouTube audio on node "${node.id}": "${ytCandidate.info.title}"`);
-                                    break;
-                                }
-                            }
-                            if (!trySoundCloudFirst) {
-                                const scRes = await node.search({ query: fallbackQuery, source: "scsearch" }, track.requester);
-                                if (scRes?.tracks?.length && scRes.loadType !== "empty" && scRes.loadType !== "error") {
-                                    const scCandidate = scRes.tracks.find((t) => t.info.identifier !== failedId &&
-                                        !restrictedTrackIds.has(t.info.identifier) &&
-                                        isRelevantTrack(t.info.title, cleanTitle));
-                                    if (scCandidate) {
-                                        recoveredTrack = scCandidate;
-                                        targetNode = node;
-                                        console.log(`[Universal Recovery] Found verified SoundCloud alternative on node "${node.id}": "${scCandidate.info.title}"`);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        catch (e) {
-                            const errMsg = e?.message || String(e);
-                            if (errMsg.includes("Unexpected token '<'") || errMsg.includes("<html>") || errMsg.includes("502")) {
-                                markNodeDegraded(node.id);
-                            }
-                            console.warn(`[Universal Recovery] Search failed on node ${node.id}:`, errMsg);
-                        }
-                    }
-                }
+                const alternateNodes = Array.from(lavalink.nodeManager.nodes.values())
+                    .filter(n => n.connected && n.id !== player.node.id)
+                    .sort((a, b) => Number(isNodeHealthy(b.id)) - Number(isNodeHealthy(a.id)));
+                const result = await resolveRecoveryTrack(track, [...alternateNodes, player.node], recoveryIsCurrent);
+                const recoveredTrack = result?.track;
+                const targetNode = result?.node;
+                if (!recoveryIsCurrent())
+                    return;
                 if (recoveredTrack) {
                     // If the recovery track was found on another node, migrate player
                     if (player.node.id !== targetNode.id) {
@@ -1000,27 +870,36 @@ export function initLavalink(client) {
                         }
                         catch (err) {
                             console.warn("[Universal Recovery] changeNode error:", err?.message || err);
+                            return;
                         }
                     }
                     recoveredTrack.requester = track.requester;
-                    if (track.info.artworkUrl)
-                        recoveredTrack.info.artworkUrl = track.info.artworkUrl;
+                    if (!recoveryIsCurrent())
+                        return;
+                    recoveredTrack.userData = {
+                        command: track.userData?.command,
+                        isAutoplay: track.userData?.isAutoplay,
+                        requestedVideoId: track.userData?.requestedVideoId,
+                        requestedUri: track.userData?.requestedUri,
+                        ...recoveredTrack.userData, recoveryAttempts,
+                    };
                     try {
-                        await player.play({ clientTrack: recoveredTrack, noReplace: false });
+                        const position = recoveredTrack.info.isSeekable !== false && !recoveredTrack.info.isStream
+                            ? Math.min(failedPosition, Math.max(0, recoveredTrack.info.duration - 1000)) : 0;
+                        await player.play({ clientTrack: recoveredTrack, noReplace: false, position });
                     }
                     catch (playErr) {
+                        if (player.getData("playback_generation") === generation && player.queue.current === recoveredTrack)
+                            player.queue.current = track;
                         console.warn("[Universal Recovery] play error:", playErr?.message || playErr);
+                        return;
                     }
                     if (player.textChannelId) {
                         const channel = client.channels.cache.get(player.textChannelId);
                         const isJio = Boolean(recoveredTrack.userData?.isJioSaavn);
-                        const streamLabel = isJio ? "💎 **JioSaavn Studio Master (320 kbps AAC)**" : "high-fidelity stream";
-                        channel?.send(`🔄 **Auto-Recovered:** Restriction detected on video. Swapped to ${streamLabel}: **[${recoveredTrack.info.title}](${recoveredTrack.info.uri})**`).then((msg) => autoDeleteMessage(msg, 7000)).catch(() => { });
+                        const streamLabel = isJio ? "**JioSaavn**" : "an alternate stream";
+                        channel?.send(`🔄 **Retrying playback** via ${streamLabel}: **[${recoveredTrack.info.title}](${recoveredTrack.info.uri})**`).then((msg) => autoDeleteMessage(msg, 7000)).catch(() => { });
                     }
-                    setTimeout(() => {
-                        player.setData("recovering_track", false);
-                        player.setData("recovery_attempts", 0);
-                    }, 6000);
                     return;
                 }
             }
@@ -1031,27 +910,29 @@ export function initLavalink(client) {
                 player.setData("recovering_track", false);
             }
         }
-        if (!player.textChannelId)
+        if (!recoveryIsCurrent() || !player.textChannelId)
             return;
         const channel = client.channels.cache.get(player.textChannelId);
         if (channel) {
-            channel.send(`⚠️ Error playing **${track?.info.title || "track"}**: ${payload.exception?.message || "Audio stream error"}`).then((msg) => autoDeleteMessage(msg, 8000)).catch(() => { });
+            channel.send(track.userData?.requestedVideoId
+                ? "⚠️ The exact YouTube video is unavailable on the audio nodes. Try `/play` with its song and artist, or `/jio` for a catalog recording."
+                : `⚠️ Playback failed for **${track.info.title}**. No matching recording could be recovered. Try again later or choose another source.`).then((msg) => autoDeleteMessage(msg, 8000)).catch(() => { });
         }
     });
     return lavalink;
 }
 export function getBestNode() {
-    if (config.lavalink.host && config.lavalink.host !== "localhost" && !config.lavalink.host.includes("jirayu")) {
+    if (process.env.LAVALINK_HOST) {
         const custom = lavalink.nodeManager.nodes.get("Primary-CustomNode");
         if (custom?.connected && isNodeHealthy("Primary-CustomNode"))
             return "Primary-CustomNode";
     }
     // Score every healthy connected node by real-time load metrics.
     // Lower score = less load = better for new streams.
-    const candidates = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected && isNodeHealthy(n.id) && !n.id.includes("Custom"));
+    const candidates = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected && isNodeHealthy(n.id));
     if (candidates.length === 0) {
         // All healthy nodes gone — fall back to any connected node
-        const fallback = Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected && !n.id.includes("Custom"));
+        const fallback = Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected);
         return fallback?.id;
     }
     // Node load score (lower = better):
@@ -1071,7 +952,7 @@ export function getBestNode() {
         // Priority bonus (lower = preferred when load is equal)
         let priorityBonus = 50;
         if (node.id === "Kasawa-MasterNode")
-            priorityBonus = -500; // Primary master node (direct HTTP 320k JioSaavn + YT/SoundCloud)
+            priorityBonus = 0; // Primary master node (direct HTTP 320k JioSaavn + YT/SoundCloud)
         if (node.id === "Serenetia-AuxNode")
             priorityBonus = 10;
         if (node.id === "Millo-BackupNode")
@@ -1189,7 +1070,7 @@ export function clearUpdaterState(guildId) {
  * Updates the active Now Playing message in the text channel with rate-limiting & queuing protection
  */
 export async function updateActivePlayerMessage(player, immediate = false) {
-    if (!player.textChannelId)
+    if (!player.textChannelId || lavalink.getPlayer(player.guildId) !== player)
         return;
     let state = updaterStates.get(player.guildId);
     if (!state) {
@@ -1197,7 +1078,7 @@ export async function updateActivePlayerMessage(player, immediate = false) {
         updaterStates.set(player.guildId, state);
     }
     const now = Date.now();
-    const MIN_INTERVAL = 2200; // minimum 2.2s between message edits to guarantee zero Discord 429 rate limits
+    const MIN_INTERVAL = 2200; // Space edits to reduce Discord rate-limit pressure.
     const elapsed = now - state.lastEditTime;
     if (state.inFlight) {
         state.pending = true;
@@ -1222,9 +1103,7 @@ export async function updateActivePlayerMessage(player, immediate = false) {
     }
     state.inFlight = true;
     try {
-        const editPromise = performPlayerMessageEdit(player);
-        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Edit timeout")), 3500));
-        await Promise.race([editPromise, timeoutPromise]);
+        await performPlayerMessageEdit(player);
         state.lastEditTime = Date.now();
     }
     catch (err) {
@@ -1234,7 +1113,7 @@ export async function updateActivePlayerMessage(player, immediate = false) {
     }
     finally {
         state.inFlight = false;
-        if (state.pending) {
+        if (state.pending && lavalink.getPlayer(player.guildId) === player) {
             state.pending = false;
             state.timer = setTimeout(() => {
                 state.timer = undefined;
@@ -1272,7 +1151,7 @@ async function performPlayerMessageEdit(player) {
         if (!msg) {
             msg = await channel.messages.fetch(messageId).catch(() => null);
         }
-        if (msg) {
+        if (msg && lavalink.getPlayer(player.guildId) === player && activePlayerMessages.get(player.guildId) === messageId) {
             const editedMsg = await msg.edit(buildPlayerMessage(player));
             playerMessageCache.set(player.guildId, editedMsg);
         }

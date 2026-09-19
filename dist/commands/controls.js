@@ -1,3 +1,4 @@
+import { canSeek, parseSeek } from "../utils/playback.js";
 import { SlashCommandBuilder, } from "discord.js";
 import { activePlayerMessages, clearAllFilters, discordClient, lavalink, smoothFadePause, smoothFadeResume, updateActivePlayerMessage, validateVoiceGate, } from "../lavalink/client.js";
 import { autoDeleteReply } from "../utils/cleanup.js";
@@ -171,37 +172,15 @@ export const seekCommand = {
         const player = await getPlayerWithGate(interaction);
         if (!player || !player.queue.current)
             return;
-        const timeStr = interaction.options.getString("timestamp", true).trim();
-        let targetMs = 0;
-        if (timeStr.includes(":")) {
-            const parts = timeStr.split(":").map(Number);
-            if (parts.some(isNaN)) {
-                return interaction.reply({ content: "❌ Invalid time format! Use `MM:SS` or `HH:MM:SS`.", ephemeral: true });
-            }
-            if (parts.length === 2) {
-                targetMs = (parts[0] * 60 + parts[1]) * 1000;
-            }
-            else if (parts.length === 3) {
-                targetMs = (parts[0] * 3600 + parts[1] * 60 + parts[2]) * 1000;
-            }
-        }
-        else {
-            const sec = parseFloat(timeStr);
-            if (isNaN(sec)) {
-                return interaction.reply({ content: "❌ Invalid timestamp number!", ephemeral: true });
-            }
-            targetMs = sec * 1000;
-        }
-        const duration = player.queue.current.info.duration;
-        if (targetMs < 0 || (duration > 0 && targetMs > duration)) {
-            return interaction.reply({
-                content: `❌ Timestamp must be between 00:00 and ${formatDuration(duration)}!`,
-                ephemeral: true,
-            });
-        }
+        if (!canSeek(player.queue.current))
+            return interaction.reply({ content: "This stream does not support seeking.", ephemeral: true });
+        const targetMs = parseSeek(interaction.options.getString("timestamp", true), player.position || 0, player.queue.current.info.duration);
+        if (targetMs === null)
+            return interaction.reply({ content: "Use MM:SS, HH:MM:SS, seconds, or a relative time such as +30.", ephemeral: true });
+        await interaction.deferReply();
         await player.seek(targetMs);
         await updateActivePlayerMessage(player, true);
-        await interaction.reply(`⏩ Jumped to **${formatDuration(targetMs)}**`);
+        await interaction.editReply(`⏩ Jumped to **${formatDuration(targetMs)}**`);
         autoDeleteReply(interaction, 8000);
     },
 };

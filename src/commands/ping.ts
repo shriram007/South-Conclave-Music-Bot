@@ -38,7 +38,7 @@ export const pingCommand = {
     const activeNode = player?.node || (bestNodeId ? lavalink.nodeManager.nodes.get(bestNodeId) : null) || Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected);
 
     const currentTrack = player?.queue?.current;
-    const sourceInfo = currentTrack ? getSourceInfo(currentTrack.info.sourceName, currentTrack.info.uri) : null;
+    const sourceInfo = currentTrack ? getSourceInfo(currentTrack.info.sourceName, currentTrack.info.uri, currentTrack.userData) : null;
 
     const embed = new EmbedBuilder()
       .setColor(voicePing > 0 && voicePing < 100 ? 0x00d26a : 0x5865f2)
@@ -58,7 +58,7 @@ export const pingCommand = {
       },
       {
         name: "🌐 Lavalink Server Latency",
-        value: lavalinkPing >= 0 ? getPingBadge(lavalinkPing) : getPingBadge(activeNode?.stats?.uptime ? 180 : -1),
+        value: lavalinkPing >= 0 ? getPingBadge(lavalinkPing) : getPingBadge(-1),
         inline: true,
       },
       {
@@ -74,7 +74,7 @@ export const pingCommand = {
       const memUsedMb = stats?.memory ? Math.round(stats.memory.used / 1024 / 1024) : 0;
       const memTotalMb = stats?.memory ? Math.round(stats.memory.reservable / 1024 / 1024) : 0;
       const cpuLoad = stats?.cpu ? (stats.cpu.lavalinkLoad * 100).toFixed(1) : "0.0";
-      const frameDeficit = stats?.frameStats?.deficit ?? 0;
+      const frameDeficit = stats?.frameStats?.deficit;
 
       embed.addFields([
         {
@@ -89,8 +89,10 @@ export const pingCommand = {
         {
           name: "📊 Audio Packet Fidelity & Health",
           value:
-            frameDeficit === 0
-              ? "✅ **100% Stream Health** (0 audio frame deficit / 0% packet loss)"
+            frameDeficit == null
+              ? "Audio frame statistics not reported by this node."
+              : frameDeficit === 0
+              ? "No audio frame deficit reported. Network packet loss is not measured here."
               : `⚠️ **Deficit Frames:** \`${frameDeficit}\` (Minor jitter / auto-recovering)`,
           inline: false,
         },

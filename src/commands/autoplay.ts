@@ -1,3 +1,4 @@
+import { purgeAutoplayTracks } from "../lavalink/client.js";
 import {
   ChatInputCommandInteraction,
   SlashCommandBuilder,
@@ -38,6 +39,7 @@ export const autoplayCommand = {
     const newAutoplay = modeOpt ? modeOpt === "on" : !currentAutoplay;
 
     player.setData("autoplay", newAutoplay);
+    if (!newAutoplay) purgeAutoplayTracks(player);
     await updateActivePlayerMessage(player, true);
 
     await interaction.reply(

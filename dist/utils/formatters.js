@@ -71,65 +71,16 @@ export function getSourceInfo(sourceName, uri, userData) {
     const isJio = Boolean(userData?.isJioSaavn) || src === "jiosaavn" || rawUri.includes("saavncdn.com") || rawUri.includes("jiosaavn.com");
     const isAutoplay = Boolean(userData?.isAutoplay) || userData?.command === "Autoplay";
     const cmd = isAutoplay ? "📻 Autoplay" : (userData?.command || (isJio ? "/jio" : "/play"));
-    if (isJio) {
-        return {
-            name: "JioSaavn Studio Master",
-            quality: "320 kbps AAC Studio Audio",
-            badge: `💎 **JioSaavn Studio** \`320 kbps AAC\` *(via ${cmd})*`,
-            color: 0x2bc5b4,
-            command: cmd,
-        };
-    }
-    switch (src) {
-        case "deezer":
-            return {
-                name: "Deezer Hi-Fi",
-                quality: "320 kbps MP3 / Lossless FLAC",
-                badge: `💎 **Deezer Hi-Fi** \`320 kbps / FLAC\` *(via ${cmd})*`,
-                color: 0xef5466,
-                command: cmd,
-            };
-        case "spotify":
-            return {
-                name: "Spotify",
-                quality: "Hi-Fi Studio Match",
-                badge: `🟢 **Spotify** \`Hi-Fi Stream\` *(via ${cmd})*`,
-                color: 0x1db954,
-                command: cmd,
-            };
-        case "applemusic":
-            return {
-                name: "Apple Music",
-                quality: "Apple Lossless Matched",
-                badge: `🍎 **Apple Music** \`HQ Stream\` *(via ${cmd})*`,
-                color: 0xfc3c44,
-                command: cmd,
-            };
-        case "youtubemusic":
-            return {
-                name: "YouTube Music",
-                quality: "256 kbps AAC / Opus",
-                badge: `🎧 **YouTube Music HQ** \`256 kbps\` *(via ${cmd})*`,
-                color: 0xff0000,
-                command: cmd,
-            };
-        case "soundcloud":
-            return {
-                name: "SoundCloud",
-                quality: "SoundCloud High Quality",
-                badge: `🟠 **SoundCloud** \`HQ Stream\` *(via ${cmd})*`,
-                color: 0xff5500,
-                command: cmd,
-            };
-        default:
-            return {
-                name: sourceName || "Direct Stream",
-                quality: "High-Fidelity Opus",
-                badge: `🎵 **${sourceName || "Standard"}** \`HQ Opus\` *(via ${cmd})*`,
-                color: 0x5865f2,
-                command: cmd,
-            };
-    }
+    const names = {
+        youtube: userData?.searchSource === "ytmsearch" ? "YouTube Music search" : "YouTube",
+        youtubemusic: "YouTube Music", spotify: "Spotify catalog match",
+        applemusic: "Apple Music catalog match", deezer: "Deezer", soundcloud: "SoundCloud",
+    };
+    const name = isJio ? "JioSaavn" : names[src] || sourceName || "Direct stream";
+    const quality = isJio && userData?.quality === "320kbps"
+        ? "320 kbps source requested; output encoded for Discord"
+        : "Source bitrate not reported";
+    return { name, quality, badge: `🎵 **${name}** *(via ${cmd})*`, color: isJio ? 0x2bc5b4 : 0x5865f2, command: cmd };
 }
 /**
  * Inspect voice channel bitrate status
@@ -137,17 +88,11 @@ export function getSourceInfo(sourceName, uri, userData) {
 export function getChannelBitrateInfo(channel) {
     const bitrateKbps = Math.round(channel.bitrate / 1000);
     const tier = channel.guild.premiumTier;
-    let maxPossible = 96;
-    if (tier === 1)
-        maxPossible = 128;
-    if (tier === 2)
-        maxPossible = 256;
-    if (tier === 3)
-        maxPossible = 384;
+    const maxPossible = Math.round(channel.guild.maximumBitrate / 1000);
     const isMaxQuality = bitrateKbps >= maxPossible;
     let recommendation = "";
     if (bitrateKbps < 96) {
-        recommendation = `⚠️ **Channel bitrate is set to ${bitrateKbps} kbps.** To get premium 300+ kbps sound, ask an admin to edit this Voice Channel and drag the **Bitrate slider to the maximum**!`;
+        recommendation = `⚠️ **Channel bitrate is set to ${bitrateKbps} kbps.** For the highest available channel bitrate, ask an admin to edit this Voice Channel and drag the **Bitrate slider to the maximum**!`;
     }
     else if (bitrateKbps < maxPossible) {
         recommendation = `ℹ️ This server has Boost Tier ${tier} (supports up to ${maxPossible} kbps). Increase this voice channel's bitrate slider to **${maxPossible} kbps** for maximum clarity.`;
@@ -172,24 +117,23 @@ export function parseTrackTitle(rawTitle, rawAuthor = "") {
     let title = (rawTitle || "").trim();
     let movieOrAlbum = "";
     let songTitle = "";
-    let artist = (rawAuthor || "").replace(/- Topic/gi, "").trim();
+    let artist = (rawAuthor || "").replace(/- Topic|VEVO$/gi, "").trim();
     // Strip labels/channels from author
-    if (/vevo|t-series|sony|zee|saregama|aditya|tips|channel|think music|speed audio|lahari|yt records|speed records/i.test(artist)) {
+    if (/t-series|sony music|zee music|saregama|aditya music|tips official|channel|think music|speed audio|lahari|yt records|speed records|wunderbar films|u1 records|sun pictures/i.test(artist)) {
         artist = "";
     }
     // Extract movie name if parenthesized like (From "96")
-    const fromMatch = title.match(/\(From\s+["'](.+?)["']\)/i);
+    const fromMatch = title.match(/\(From\s*["'](.+?)["']\)/i);
     if (fromMatch)
         movieOrAlbum = fromMatch[1].trim();
     const cleanPart = (s) => s
         .replace(/\[.*?\]/g, "")
-        .replace(/\(.*?\)/g, "")
+        .replace(/\((?:from\s*.*?|official.*?|.*?(?:video|audio|lyrics?))\)/gi, "")
         .replace(/@\w+/g, "")
         .replace(/-\s*(lyric(al)?|video|audio|song|official|teaser).*/gi, "")
         .replace(/\b(official\s*(music)?\s*(video|audio|track|lyric(al)?|full)?)\b/gi, "")
         .replace(/\b(video\s*song|lyric(al)?\s*video|lyric(al)?\s*song|audio\s*song|full\s*video|full\s*song|special\s*edit|exclusive\s*edit)\b/gi, "")
         .replace(/\b(4k|8k|hd|hq|uhd|remastered|extended)\b/gi, "")
-        .replace(/\b(song|video|audio)\b/gi, "")
         .replace(/\s+/g, " ")
         .trim();
     if (title.includes("|")) {
@@ -199,9 +143,9 @@ export function parseTrackTitle(rawTitle, rawAuthor = "") {
             // Segment 0 is "Movie Songs" (e.g. "96 Songs")
             movieOrAlbum = segments[0].replace(albumKeywords, "").trim();
             songTitle = cleanPart(segments[1]);
-            for (let i = 2; i < segments.length; i++) {
+            for (let i = segments.length - 1; i >= 2; i--) {
                 const seg = segments[i];
-                if (!artist && !seg.includes(",") && seg.length < 30) {
+                if (!artist && /\b(govind vasantha|santhosh narayanan|anirudh|yuvan|a\.?\s*r\.?\s*rahman|ilayaraja|ilayaraaja|harris jayaraj|g\.?\s*v\.?\s*prakash)\b/i.test(seg) && !seg.includes(",")) {
                     artist = seg.trim();
                 }
             }
@@ -227,8 +171,16 @@ export function parseTrackTitle(rawTitle, rawAuthor = "") {
     else if (title.includes(" - ")) {
         const parts = title.split(" - ").map((s) => s.trim());
         if (parts.length === 2) {
-            songTitle = cleanPart(parts[1]);
-            movieOrAlbum = cleanPart(parts[0]);
+            if (/^(official\s+)?(lyric(al)?|video|audio)(\s+(song|video))?$/i.test(parts[1])) {
+                songTitle = cleanPart(parts[0]);
+            }
+            else {
+                songTitle = cleanPart(parts[1]);
+                if (!rawAuthor || artist)
+                    artist = artist || cleanPart(parts[0]);
+                else
+                    movieOrAlbum = cleanPart(parts[0]);
+            }
         }
         else {
             songTitle = cleanPart(title);
@@ -237,7 +189,7 @@ export function parseTrackTitle(rawTitle, rawAuthor = "") {
     else {
         songTitle = cleanPart(title);
     }
-    songTitle = songTitle.replace(/\b(song|video|audio)\b/gi, "").replace(/\s+/g, " ").trim();
+    songTitle = songTitle.replace(/\s+/g, " ").trim();
     movieOrAlbum = movieOrAlbum.replace(/\b(songs|all songs|movie|tamil|telugu|hindi)\b/gi, "").trim();
     // If songTitle became empty, fallback to cleanPart of full title
     if (!songTitle) {
@@ -305,6 +257,8 @@ export function getTrackRelevanceScore(candidateTitle, targetTitle) {
         .trim();
     const normTarget = normalize(targetTitle);
     const normCandidate = normalize(candidateTitle);
+    if (!normTarget || !normCandidate)
+        return 0;
     if (normCandidate === normTarget)
         return 1.0;
     if (normCandidate.includes(normTarget))
@@ -330,14 +284,6 @@ export function getTrackRelevanceScore(candidateTitle, targetTitle) {
                 bestSim = sim;
         }
         return bestSim;
-    }
-    // Multi-token target: check if any hyphen-separated title segment is present (e.g. "Artist - Song Title")
-    const rawParts = targetTitle.split(/[-–—|:]/);
-    for (const part of rawParts) {
-        const normPart = normalize(part);
-        if (normPart.length >= 4 && normCandidate.includes(normPart)) {
-            return 0.92;
-        }
     }
     // For multi-token queries, calculate matching token ratio with fuzzy support
     let matchedTokens = 0;

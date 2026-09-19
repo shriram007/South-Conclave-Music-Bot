@@ -32,18 +32,14 @@ export async function onReady(client: Client) {
   const guildNames = client.guilds.cache.map((g) => `"${g.name}" (${g.id})`).join(", ");
   console.log(`[Bot] Currently in ${client.guilds.cache.size} server(s): ${guildNames || "⚠️ NONE! (You need to invite the bot to your server)"}`);
 
-  // Initialize Lavalink node connection
-  await lavalink.init({
-    id: client.user.id,
-    username: client.user.username,
-  });
-
-  // Automatically restore active sessions and rejoin 24/7 channels once Lavalink node connects
+  // Register before init so a fast node connection cannot miss restoration.
   lavalink.nodeManager.once("connect", async () => {
-    await restoreSessions(client);
-    await rejoin247Channels(client);
-    startSessionAutoSave();
+    try {
+      await restoreSessions(client);
+      await rejoin247Channels(client);
+    } finally { startSessionAutoSave(); }
   });
+  await lavalink.init({ id: client.user.id, username: client.user.username });
 
   // Register Slash Commands
   const rest = new REST({ version: "10" }).setToken(config.discord.token);

@@ -26,7 +26,7 @@ export const filterCommand = {
             if (preset === "reset") {
                 await clearAllFilters(player);
                 await updateActivePlayerMessage(player);
-                await interaction.editReply("🔄 **Equalizer Reset!** Streaming flat, 100% bit-perfect pure master audio.");
+                await interaction.editReply("🔄 **Equalizer Reset!** Streaming flat, audio with no EQ or effects.");
                 autoDeleteReply(interaction, 8000);
                 return;
             }
@@ -39,7 +39,7 @@ export const filterCommand = {
                     player.setData("hifi_active", true);
                     player.setData("eq_preset", "💎 Hi-Fi Studio");
                     await player.filterManager.setEQ(EQ_PRESETS.hifi);
-                    replyText = "💎 **Hi-Fi Studio Applied!** Audiophile dynamics, crystal clarity, and zero clipping.";
+                    replyText = "💎 **Hi-Fi Studio Applied!** Gentle tonal shaping for bass and vocal clarity. EQ does not increase source bitrate.";
                     break;
                 case "bassboost":
                     player.setData("hifi_active", false);

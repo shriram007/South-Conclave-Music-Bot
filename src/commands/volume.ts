@@ -32,13 +32,6 @@ export const volumeCommand = {
     const vol = interaction.options.getInteger("level", true);
     await player.setVolume(vol);
 
-    if (vol === 100) {
-      const activePreset = player.getData("filter_preset_key") as string | undefined;
-      if (!activePreset || activePreset === "reset") {
-        await clearAllFilters(player);
-      }
-    }
-
     await updateActivePlayerMessage(player);
 
     let icon = "🔊";

@@ -10,22 +10,11 @@ export function createFullEQ(bandGains: Record<number, number>): { band: number;
 
 export const EQ_PRESETS = {
   hifi: createFullEQ({
-    // True Audiophile Subtractive Mastering Curve (0 dBFS headroom ceiling, 100% distortion-free on all masters)
-    0: -0.02, // 25Hz Sub-bass
-    1: -0.02, // 40Hz Sub-bass
-    2: -0.03, // 63Hz Deep Bass
-    3: -0.04, // 100Hz Punch
-    4: -0.07, // 160Hz Low-Mid (mud cut)
-    5: -0.08, // 250Hz Low-Mid (boxiness cut)
-    6: -0.07, // 400Hz Mid (hollowness cut)
-    7: -0.04, // 630Hz Mid
-    8: -0.03, // 1.0kHz Core Mid
-    9: -0.02, // 1.6kHz Vocal Presence
-    10: -0.01, // 2.5kHz Clarity
-    11: 0.00, // 4.0kHz Attack & Detail (Peak at 0.0 dBFS)
-    12: 0.00, // 6.3kHz Sheen (Peak at 0.0 dBFS)
-    13: -0.01, // 10.0kHz Air
-    14: -0.02, // 16.0kHz Top End
+    // Gentle subtractive contour: retain bass/presence, reduce low-mid masking.
+    // No fixed curve can guarantee clip-free output for every recording.
+    0: 0, 1: 0, 2: 0, 3: -0.01, 4: -0.04,
+    5: -0.05, 6: -0.04, 7: -0.02, 8: 0, 9: 0,
+    10: 0, 11: 0, 12: 0, 13: -0.01, 14: -0.01,
   }),
   bassboost: createFullEQ({
     0: 0.14, 1: 0.12, 2: 0.08, 3: 0.03, 4: -0.02,

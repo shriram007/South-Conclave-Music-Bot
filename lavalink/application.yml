@@ -9,8 +9,8 @@ lavalink:
     # LavaSrc Plugin for Spotify and Apple Music
     - dependency: "com.github.topi314.lavasrc:lavasrc-plugin:4.4.1"
       repository: "https://maven.lavalink.dev/releases"
-    # Lavalink v4 YouTube Plugin (Supports YouTube Music 256k & Web)
-    - dependency: "dev.arbjerg.lavalink.libraries.v4:lavalink-plugins-youtube:1.11.4"
+    # YouTube source plugin; search does not guarantee a particular stream bitrate
+    - dependency: "dev.lavalink.youtube:youtube-plugin:1.18.2"
       repository: "https://maven.lavalink.dev/releases"
     # JioSaavn Plugin (Pristine 320 kbps Indian & Global audio streaming)
     - dependency: "com.github.bongo-devs:jiosaavn-plugin:0.1.7"
@@ -27,7 +27,7 @@ lavalink:
       http: true
       local: false
 
-    # Studio-Grade Audio Pipeline Settings (Targeting 300+ kbps Opus)
+    # Audio pipeline for this node only; Discord channel settings limit output
     bufferDurationMs: 400
     frameBufferDurationMs: 5000
     opusEncodingQuality: 10      # Max Opus quality (0-10, 10 is highest fidelity)
@@ -56,13 +56,13 @@ plugins:
     allowDirectVideoIds: true
     allowDirectPlaylistIds: true
     clients:
-      - MUSIC                    # YouTube Music 256k AAC HQ
+      - MUSIC                    # YouTube Music search only
       - WEB
-      - ANDROID
+      - ANDROID_VR
 
   lavasrc:
     providers:
-      # Provider fallback order: YouTube Music HQ first, then ISRC search
+      # Provider fallback order: YouTube Music ISRC and title search, then YouTube
       - "ytmsearch:\"%ISRC%\""
       - "ytmsearch:%QUERY%"
       - "ytsearch:\"%ISRC%\""

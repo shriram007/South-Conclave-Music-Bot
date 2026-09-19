@@ -29,7 +29,7 @@ export function buildQueueMessage(player, page = 0, selectedIndex = 0, initiator
     let desc = "";
     if (current) {
         const currSource = getSourceInfo(current.info.sourceName, current.info.uri, current.userData);
-        const currTag = currSource.name.includes("JioSaavn") ? "💎 JioSaavn" : (current.info.sourceName === "spotify" ? "🟢 Spotify" : "🎧 YT Music");
+        const currTag = currSource.name;
         desc += `**Now Playing:** [${current.info.title.substring(0, 48)}](${current.info.uri || "https://discord.com"}) • \`${formatDuration(current.info.duration || 0)}\` • ${currTag} (\`${currSource.command}\`)\n\n`;
     }
     if (pageTracks.length === 0) {
@@ -55,7 +55,7 @@ export function buildQueueMessage(player, page = 0, selectedIndex = 0, initiator
             const author = (t.info.author || "Unknown Artist").substring(0, 30);
             const dur = formatDuration(t.info.duration || 0);
             const tSource = getSourceInfo(t.info.sourceName, t.info.uri, t.userData);
-            const sourceTag = tSource.name.includes("JioSaavn") ? "💎 JioSaavn" : (t.info.sourceName === "spotify" ? "🟢 Spotify" : "🎧 YT Music");
+            const sourceTag = tSource.name;
             const cmdTag = `\`${tSource.command}\``;
             if (isTarget) {
                 desc += `**${num}. [${title}](${t.info.uri || ""})** - \`${dur}\`\n*${author}* • ${sourceTag} (${cmdTag})  🔘 **[Selected]**\n\n`;

@@ -1,8 +1,10 @@
+import { youtubeVideoId } from "../utils/playback.js";
+import { rankSearchTracks } from "../utils/trackSelection.js";
 import { EmbedBuilder, SlashCommandBuilder, } from "discord.js";
 import { getBestNode, getOrCreatePlayer, isNodeHealthy, lavalink, markNodeDegraded, purgeAutoplayTracks, restrictedTrackIds, updateActivePlayerMessage } from "../lavalink/client.js";
 import { autoDeleteReply } from "../utils/cleanup.js";
 import { getFavorites } from "../utils/favorites.js";
-import { detectTrackLanguage, formatDuration, getSourceInfo, getTrackRelevanceScore, isRelevantTrack } from "../utils/formatters.js";
+import { detectTrackLanguage, formatDuration, getSourceInfo } from "../utils/formatters.js";
 import { getPlaylist, getUserPlaylists } from "../utils/playlists.js";
 import { getMusicSuggestions } from "../utils/suggestions.js";
 import { isJioSaavnUrl, loadJioSaavnAsLavalinkTrack, resolveJioSaavnTrack, resolveJioSaavnUrl } from "../services/jiosaavn.js";
@@ -11,6 +13,7 @@ async function resolveSpotifyTrack(url) {
         const cleanUrl = url.split("?")[0];
         const resp = await fetch(cleanUrl, {
             headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" },
+            signal: AbortSignal.timeout(4000),
         });
         if (resp.ok) {
             const html = await resp.text();
@@ -20,7 +23,7 @@ async function resolveSpotifyTrack(url) {
                 return `${match[1]} ${match[2]}`.trim();
             }
         }
-        const oembedResp = await fetch(`https://open.spotify.com/oembed?url=${encodeURIComponent(cleanUrl)}`);
+        const oembedResp = await fetch(`https://open.spotify.com/oembed?url=${encodeURIComponent(cleanUrl)}`, { signal: AbortSignal.timeout(4000) });
         if (oembedResp.ok) {
             const data = (await oembedResp.json());
             if (data.title) {
@@ -35,22 +38,9 @@ async function resolveSpotifyTrack(url) {
 }
 export async function resolveTrackQuery(rawQuery) {
     let trimmed = rawQuery.trim();
-    // If it's a YouTube watch URL with an auto-generated mix (&list=RD... or &list=UL...), strip the mix list param so it only plays the selected track
-    if (trimmed.includes("youtube.com/watch") && trimmed.includes("v=")) {
-        try {
-            const urlObj = new URL(trimmed);
-            const listParam = urlObj.searchParams.get("list");
-            if (listParam && !listParam.startsWith("PL")) {
-                urlObj.searchParams.delete("list");
-                urlObj.searchParams.delete("index");
-                trimmed = urlObj.toString();
-                console.log(`[Play] Cleaned YouTube mix playlist parameter -> "${trimmed}"`);
-            }
-        }
-        catch (e) {
-            // Ignore URL parse error
-        }
-    }
+    const videoId = youtubeVideoId(trimmed);
+    if (videoId)
+        trimmed = `https://www.youtube.com/watch?v=${videoId}`;
     // If Spotify track link: resolve track title & artist for 100% stable YouTube Music HQ audio stream
     if (/^https?:\/\/open\.spotify\.com\/track\//i.test(trimmed)) {
         const resolved = await resolveSpotifyTrack(trimmed);
@@ -70,6 +60,23 @@ export async function resolveTrackQuery(rawQuery) {
  */
 export async function smartSearch(player, query, isUrl, user) {
     if (isUrl) {
+        const exactVideoId = youtubeVideoId(query);
+        if (exactVideoId) {
+            const nodes = [player.node, ...lavalink.nodeManager.nodes.values()]
+                .filter((n, i, all) => n?.connected && all.findIndex(x => x?.id === n.id) === i);
+            for (const node of nodes) {
+                try {
+                    const res = await node.search({ query: `https://www.youtube.com/watch?v=${exactVideoId}` }, user);
+                    const exact = res?.tracks?.find((t) => t.info.identifier === exactVideoId && /youtube/i.test(t.info.sourceName));
+                    if (!exact)
+                        continue;
+                    exact.userData = { ...exact.userData, requestedVideoId: exactVideoId, requestedUri: query };
+                    return { ...res, loadType: "track", tracks: [exact] };
+                }
+                catch { /* Try the same video on the next node, never a title search. */ }
+            }
+            return null;
+        }
         // 0. Native JioSaavn URL resolution (song, album, playlist)
         if (isJioSaavnUrl(query)) {
             try {
@@ -83,7 +90,7 @@ export async function smartSearch(player, query, isUrl, user) {
                         const converted = await loadJioSaavnAsLavalinkTrack(jioResult.track, user, candidateNodes);
                         if (converted) {
                             if (player.node && player.node.id !== converted.node.id && !player.playing) {
-                                player.changeNode(converted.node, false).catch(() => { });
+                                await player.changeNode(converted.node, false);
                             }
                             return { loadType: "track", tracks: [converted.track] };
                         }
@@ -143,7 +150,8 @@ export async function smartSearch(player, query, isUrl, user) {
                 const nodeRes = await node.search({ query }, user);
                 if (nodeRes?.tracks?.length && nodeRes.loadType !== "empty" && nodeRes.loadType !== "error") {
                     console.log(`[SmartSearch] URL resolved on healthy node "${node.id}". Migrating player to stream...`);
-                    await player.changeNode(node, false).catch(() => { });
+                    if (!player.playing && !player.paused && typeof player.changeNode === "function")
+                        await player.changeNode(node, false);
                     return nodeRes;
                 }
             }
@@ -155,7 +163,8 @@ export async function smartSearch(player, query, isUrl, user) {
             try {
                 const nodeRes = await node.search({ query }, user);
                 if (nodeRes?.tracks?.length && nodeRes.loadType !== "empty" && nodeRes.loadType !== "error") {
-                    await player.changeNode(node, false).catch(() => { });
+                    if (!player.playing && !player.paused && typeof player.changeNode === "function")
+                        await player.changeNode(node, false);
                     return nodeRes;
                 }
             }
@@ -163,7 +172,7 @@ export async function smartSearch(player, query, isUrl, user) {
         }
         return null;
     }
-    const connectedNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected && !n.id.includes("Custom"));
+    const connectedNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected);
     const healthyNodes = connectedNodes.filter((n) => isNodeHealthy(n.id));
     const kasawaNode = healthyNodes.find((n) => n.id === "Kasawa-MasterNode");
     const milloNode = healthyNodes.find((n) => n.id === "Millo-BackupNode");
@@ -180,16 +189,20 @@ export async function smartSearch(player, query, isUrl, user) {
         ...otherHealthy.filter((n) => n.id !== player.node?.id),
     ] : degradedList;
     // Helper to ensure player is assigned to the healthy resolving node
-    const syncPlayerNode = (targetNode) => {
-        if (player.node && player.node.id !== targetNode.id && (!player.node.connected || !isNodeHealthy(player.node.id))) {
+    const syncPlayerNode = async (targetNode) => {
+        if (typeof player.changeNode === "function" && !player.playing && !player.paused && player.node && player.node.id !== targetNode.id) {
             console.log(`[SmartSearch] Migrating player from degraded ${player.node.id} to healthy search node ${targetNode.id}...`);
-            player.changeNode(targetNode, false).catch(() => { });
+            await player.changeNode(targetNode, false);
         }
     };
     const executeSearchWithTimeout = async (node, searchOpts, timeoutMs = 3500) => {
-        const searchPromise = node.search(searchOpts, user);
-        const timeoutPromise = new Promise((r) => setTimeout(() => r(null), timeoutMs));
-        return Promise.race([searchPromise, timeoutPromise]);
+        let timer;
+        try {
+            return await Promise.race([node.search(searchOpts, user), new Promise(r => { timer = setTimeout(() => r(null), timeoutMs); })]);
+        }
+        finally {
+            clearTimeout(timer);
+        }
     };
     const handleSearchError = (node, e, label) => {
         const errMsg = e?.message || String(e);
@@ -208,17 +221,6 @@ export async function smartSearch(player, query, isUrl, user) {
         }
         console.warn(`[SmartSearch] ${label} on "${node.id}" failed:`, errMsg);
     };
-    let bestCandidate = null;
-    let bestScore = 0;
-    const updateCandidate = (res, node, viable) => {
-        for (const t of viable) {
-            const titleScore = getTrackRelevanceScore(t.info.title, query);
-            if (titleScore > bestScore) {
-                bestScore = titleScore;
-                bestCandidate = { res, node, tracks: [t, ...viable.filter((x) => x !== t)] };
-            }
-        }
-    };
     // 1. Try YouTube Music (ytmsearch) across connected healthy nodes
     for (const node of nodesToTry) {
         try {
@@ -226,11 +228,12 @@ export async function smartSearch(player, query, isUrl, user) {
             if (res?.tracks?.length && res.loadType !== "empty" && res.loadType !== "error") {
                 const viable = res.tracks.filter((t) => !restrictedTrackIds.has(t.info.identifier));
                 if (viable.length > 0) {
-                    updateCandidate(res, node, viable);
-                    const relevant = viable.filter((t) => isRelevantTrack(t.info.title, query));
+                    const relevant = rankSearchTracks(viable, query);
                     if (relevant.length > 0) {
-                        syncPlayerNode(node);
+                        await syncPlayerNode(node);
                         console.log(`[SmartSearch] Found "${relevant[0].info.title}" via ytmsearch on node "${node.id}"`);
+                        for (const t of relevant)
+                            t.userData = { ...t.userData, searchSource: "ytmsearch" };
                         return { ...res, tracks: relevant };
                     }
                 }
@@ -254,7 +257,7 @@ export async function smartSearch(player, query, isUrl, user) {
                 ];
                 const converted = await loadJioSaavnAsLavalinkTrack(jioTrack, user, candidateNodes);
                 if (converted) {
-                    syncPlayerNode(converted.node);
+                    await syncPlayerNode(converted.node);
                     converted.track.userData = {
                         ...(converted.track.userData || {}),
                         command: "/play",
@@ -275,10 +278,9 @@ export async function smartSearch(player, query, isUrl, user) {
             if (res?.tracks?.length && res.loadType !== "empty" && res.loadType !== "error") {
                 const viable = res.tracks.filter((t) => !restrictedTrackIds.has(t.info.identifier));
                 if (viable.length > 0) {
-                    updateCandidate(res, node, viable);
-                    const relevant = viable.filter((t) => isRelevantTrack(t.info.title, query));
+                    const relevant = rankSearchTracks(viable, query);
                     if (relevant.length > 0) {
-                        syncPlayerNode(node);
+                        await syncPlayerNode(node);
                         console.log(`[SmartSearch] Found "${relevant[0].info.title}" via ytsearch (audio) on node "${node.id}"`);
                         return { ...res, tracks: relevant };
                     }
@@ -296,10 +298,9 @@ export async function smartSearch(player, query, isUrl, user) {
             if (res?.tracks?.length && res.loadType !== "empty" && res.loadType !== "error") {
                 const viable = res.tracks.filter((t) => !restrictedTrackIds.has(t.info.identifier));
                 if (viable.length > 0) {
-                    updateCandidate(res, node, viable);
-                    const relevant = viable.filter((t) => isRelevantTrack(t.info.title, query));
+                    const relevant = rankSearchTracks(viable, query);
                     if (relevant.length > 0) {
-                        syncPlayerNode(node);
+                        await syncPlayerNode(node);
                         console.log(`[SmartSearch] Found "${relevant[0].info.title}" via scsearch on node "${node.id}"`);
                         return { ...res, tracks: relevant };
                     }
@@ -309,12 +310,6 @@ export async function smartSearch(player, query, isUrl, user) {
         catch (e) {
             handleSearchError(node, e, "scsearch");
         }
-    }
-    // 4. Return highest scoring candidate if it passes reasonable relevance threshold (>= 0.45)
-    if (bestCandidate && bestScore >= 0.45) {
-        syncPlayerNode(bestCandidate.node);
-        console.log(`[SmartSearch] Returning best fuzzy candidate "${bestCandidate.tracks[0].info.title}" (score: ${bestScore.toFixed(2)}) on node "${bestCandidate.node.id}"`);
-        return { ...bestCandidate.res, tracks: bestCandidate.tracks };
     }
     // 5. Ultimate Fallback: Try JioSaavn 320 kbps Studio Master if global providers found no match
     try {
@@ -326,7 +321,7 @@ export async function smartSearch(player, query, isUrl, user) {
             ];
             const converted = await loadJioSaavnAsLavalinkTrack(jioTrack, user, candidateNodes);
             if (converted) {
-                syncPlayerNode(converted.node);
+                await syncPlayerNode(converted.node);
                 converted.track.userData = {
                     ...(converted.track.userData || {}),
                     command: "/play",
@@ -439,7 +434,7 @@ export const playCommand = {
                     const converted = await loadJioSaavnAsLavalinkTrack(jioResult.track, interaction.user, candidateNodes);
                     if (converted) {
                         if (player.node && player.node.id !== converted.node.id && !player.playing) {
-                            await player.changeNode(converted.node, false).catch(() => { });
+                            await await player.changeNode(converted.node, false);
                         }
                         const track = converted.track;
                         track.userData = { ...(track.userData || {}), command: "/play" };
@@ -447,7 +442,7 @@ export const playCommand = {
                         await player.queue.add(track);
                         if (!player.playing && !player.paused) {
                             await player.play();
-                            await interaction.editReply(`▶️ Playing **[${track.info.title}](${track.info.uri})** by **${track.info.author}** [💎 JioSaavn 320 kbps AAC]`);
+                            await interaction.editReply(`▶️ Playing **[${track.info.title}](${track.info.uri})** by **${track.info.author}** [JioSaavn]`);
                             autoDeleteReply(interaction, 10000);
                         }
                         else {
@@ -532,7 +527,7 @@ export const playCommand = {
                 const converted = await loadJioSaavnAsLavalinkTrack(jioTrack, interaction.user, candidateNodes);
                 if (converted) {
                     if (player.node && player.node.id !== converted.node.id && !player.playing) {
-                        await player.changeNode(converted.node, false).catch(() => { });
+                        await await player.changeNode(converted.node, false);
                     }
                     const track = converted.track;
                     track.userData = { ...(track.userData || {}), command: "/play" };
@@ -540,7 +535,7 @@ export const playCommand = {
                     await player.queue.add(track);
                     if (!player.playing && !player.paused) {
                         await player.play();
-                        await interaction.editReply(`▶️ Playing **[${track.info.title}](${track.info.uri})** by **${track.info.author}** [💎 JioSaavn 320 kbps AAC]`);
+                        await interaction.editReply(`▶️ Playing **[${track.info.title}](${track.info.uri})** by **${track.info.author}** [JioSaavn]`);
                         autoDeleteReply(interaction, 10000);
                     }
                     else {
@@ -576,6 +571,7 @@ export const playCommand = {
                     const oembedUrl = `https://open.spotify.com/oembed?url=${encodeURIComponent(query)}`;
                     const resp = await fetch(oembedUrl, {
                         headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" },
+                        signal: AbortSignal.timeout(4000),
                     });
                     if (resp.ok) {
                         const data = (await resp.json());

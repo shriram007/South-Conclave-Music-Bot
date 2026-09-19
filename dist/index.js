@@ -1,3 +1,4 @@
+import { saveActiveSessions } from "./utils/sessionRecovery.js";
 import { ActivityType, Client, Events, GatewayIntentBits } from "discord.js";
 import { config } from "./config.js";
 import { initLavalink, lavalink } from "./lavalink/client.js";
@@ -72,11 +73,13 @@ process.on("uncaughtException", (error) => {
 // Handle process termination cleanly
 process.on("SIGINT", () => {
     console.log("\n[Shutdown] Shutting down bot gracefully...");
+    saveActiveSessions();
     client.destroy();
     process.exit(0);
 });
 process.on("SIGTERM", () => {
     console.log("\n[Shutdown] Terminating process...");
+    saveActiveSessions();
     client.destroy();
     process.exit(0);
 });

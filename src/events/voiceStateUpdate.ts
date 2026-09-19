@@ -39,7 +39,7 @@ export function handleVoiceStateUpdate(
     if (newState.serverMute && !player.paused) {
       console.log(`[VoiceState] Bot was server muted in "${guild.name}". Auto-pausing.`);
       player.setData("paused_by_server_mute", true);
-      player.pause();
+      player.pause().catch(() => {});
       if (player.textChannelId) {
         const textChannel = guild.channels.cache.get(player.textChannelId) as TextChannel | undefined;
         textChannel?.send("I paused the music because I am server muted.").catch(() => {});
@@ -47,7 +47,7 @@ export function handleVoiceStateUpdate(
     } else if (!newState.serverMute && Boolean(player.getData("paused_by_server_mute"))) {
       console.log(`[VoiceState] Bot was server unmuted in "${guild.name}". Auto-resuming.`);
       player.setData("paused_by_server_mute", false);
-      player.resume();
+      player.resume().catch(() => {});
       if (player.textChannelId) {
         const textChannel = guild.channels.cache.get(player.textChannelId) as TextChannel | undefined;
         textChannel?.send("I resumed the music because someone unmuted me.").catch(() => {});
@@ -82,7 +82,7 @@ export function handleVoiceStateUpdate(
 
       // Re-verify player and voice channel state after grace period
       const activePlayer = lavalink.getPlayer(guild.id);
-      if (!activePlayer || !activePlayer.voiceChannelId) return;
+      if (!activePlayer || !activePlayer.voiceChannelId || is247Enabled(guild.id)) return;
 
       const currentChan = guild.channels.cache.get(activePlayer.voiceChannelId) as VoiceBasedChannel | undefined;
       const currentHumans = currentChan?.members.filter((m) => !m.user.bot);

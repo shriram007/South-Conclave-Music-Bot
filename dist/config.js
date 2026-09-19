@@ -11,6 +11,7 @@ export const config = {
         port: parseInt(process.env.LAVALINK_PORT || "2333", 10),
         password: process.env.LAVALINK_PASSWORD || "youshallnotpass",
         secure: process.env.LAVALINK_SECURE === "true",
+        publicFallbacks: process.env.LAVALINK_PUBLIC_FALLBACKS !== "false",
     },
     spotify: {
         clientId: process.env.SPOTIFY_CLIENT_ID,

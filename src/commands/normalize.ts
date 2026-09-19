@@ -10,37 +10,20 @@ import { autoDeleteReply } from "../utils/cleanup.js";
  * Applies or removes loudness normalization filter on a player
  */
 export async function applyLoudnessNormalization(player: any, enable: boolean): Promise<boolean> {
-  player.setData("normalized", enable);
-
-  if (!enable) {
-    const activePreset = player.getData("filter_preset_key") as string | undefined;
-    if (!activePreset || activePreset === "reset") {
-      await clearAllFilters(player);
-    }
-    return true;
+  const manager = player.filterManager;
+  const active = Boolean(manager?.filters?.lavalinkLavaDspxPlugin?.normalization);
+  if (enable && !player.node?.info?.filters?.includes("normalization")) {
+    player.setData("normalized", false);
+    return false;
   }
-
   try {
-    // Priority 1: Lavalink LavaDspx Plugin adaptive normalization
-    if (player.filterManager?.lavalinkLavaDspxPlugin?.toggleNormalization) {
-      const isCurrentlyActive = Boolean(player.filterManager.filters?.lavalinkLavaDspxPlugin?.normalization);
-      if (enable !== isCurrentlyActive) {
-        await player.filterManager.lavalinkLavaDspxPlugin.toggleNormalization(0.85, true);
-        return true;
-      }
-      return true;
+    if (active !== enable) {
+      await manager.lavalinkLavaDspxPlugin.toggleNormalization(0.85, true);
     }
-  } catch (err) {
-    console.warn("[Normalization] LavaDspx filter toggle error:", err);
-  }
-
-  // Priority 2: Universal fallback via comfortable gain filter
-  try {
-    player.filterManager.data.volume = 0.95;
-    await player.filterManager.applyPlayerFilters();
+    player.setData("normalized", enable);
     return true;
   } catch (err) {
-    console.warn("[Normalization] Universal fallback error:", err);
+    console.warn("[Normalization] Filter update failed:", err);
     return false;
   }
 }
@@ -48,7 +31,7 @@ export async function applyLoudnessNormalization(player: any, enable: boolean): 
 export const normalizeCommand = {
   data: new SlashCommandBuilder()
     .setName("normalize")
-    .setDescription("Toggle automated ReplayGain loudness normalization (-14 LUFS)")
+    .setDescription("Toggle adaptive loudness normalization when supported by the audio node")
     .addBooleanOption((opt) =>
       opt
         .setName("enabled")
@@ -73,21 +56,25 @@ export const normalizeCommand = {
     const currentStatus = Boolean(player.getData("normalized") ?? false);
     const targetStatus = interaction.options.getBoolean("enabled") ?? !currentStatus;
 
-    await applyLoudnessNormalization(player, targetStatus);
+    await interaction.deferReply();
+    if (!await applyLoudnessNormalization(player, targetStatus)) {
+      await interaction.editReply("⚠️ Normalization could not be applied. The connected audio node must support the normalization filter.");
+      return;
+    }
 
     const embed = new EmbedBuilder()
       .setColor(targetStatus ? 0x00d26a : 0x5865f2)
       .setTitle(targetStatus ? "🔊 Loudness Normalization Enabled" : "🔇 Loudness Normalization Disabled")
       .setDescription(
         targetStatus
-          ? "✅ **ReplayGain Active (-14 LUFS Standard):**\n" +
-            "Audio output is dynamically leveled. Quiet songs are gently elevated and loud tracks are compressed so you never have to adjust your volume slider between tracks!"
-          : "ℹ️ **ReplayGain Disabled:**\nTracks will stream at their original uploaded volume levels."
+          ? "✅ **Adaptive normalization active:**\n" +
+            "The audio node applies adaptive amplitude normalization. This is not measured ReplayGain or a fixed LUFS target."
+          : "ℹ️ **Normalization disabled:**\nTracks will stream at their original uploaded volume levels."
       )
-      .setFooter({ text: "South Conclave Audiophile Engine • ReplayGain" })
+      .setFooter({ text: "South Conclave Audio Engine • Normalization" })
       .setTimestamp();
 
-    await interaction.reply({ embeds: [embed] });
+    await interaction.editReply({ embeds: [embed] });
     autoDeleteReply(interaction, 12000);
   },
 };

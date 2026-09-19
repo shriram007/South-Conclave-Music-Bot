@@ -33,7 +33,7 @@ async function executeJioSaavn(interaction) {
                     await player.queue.add(track);
                     if (!player.playing && !player.paused) {
                         await player.play();
-                        await interaction.editReply(`▶️ Playing **[${track.info.title}](${track.info.uri})** by **${track.info.author}** [💎 JioSaavn 320 kbps AAC]`);
+                        await interaction.editReply(`▶️ Playing **[${track.info.title}](${track.info.uri})** by **${track.info.author}** [JioSaavn]`);
                         autoDeleteReply(interaction, 10000);
                     }
                     else {
@@ -106,14 +106,12 @@ async function executeJioSaavn(interaction) {
             }
         }
     }
-    // 2. Direct Text Search on JioSaavn Catalog
-    let jioTrack = await resolveJioSaavnTrack(rawQuery);
-    if (!jioTrack) {
-        const searchResults = await searchJioSaavn(rawQuery, 3);
-        if (searchResults.length > 0) {
-            jioTrack = searchResults[0];
-        }
+    if (/^https?:\/\//i.test(rawQuery)) {
+        await interaction.editReply("The JioSaavn link could not be resolved. Try a song title and artist, or use `/play` for other providers.");
+        return;
     }
+    // 2. Direct Text Search on JioSaavn Catalog
+    const jioTrack = await resolveJioSaavnTrack(rawQuery);
     if (jioTrack) {
         const converted = await loadJioSaavnAsLavalinkTrack(jioTrack, interaction.user, candidateNodes);
         if (converted) {
@@ -126,7 +124,7 @@ async function executeJioSaavn(interaction) {
             await player.queue.add(track);
             if (!player.playing && !player.paused) {
                 await player.play();
-                await interaction.editReply(`▶️ Playing **[${track.info.title}](${track.info.uri})** by **${track.info.author}** [💎 JioSaavn 320 kbps AAC]`);
+                await interaction.editReply(`▶️ Playing **[${track.info.title}](${track.info.uri})** by **${track.info.author}** [JioSaavn]`);
                 autoDeleteReply(interaction, 10000);
             }
             else {
@@ -181,7 +179,7 @@ async function autocompleteJioSaavn(interaction) {
 export const jiosaavnCommand = {
     data: new SlashCommandBuilder()
         .setName("jiosaavn")
-        .setDescription("Play songs directly from JioSaavn in pristine 320 kbps Studio Master quality")
+        .setDescription("Alias for /jio — search and play from JioSaavn")
         .addStringOption((option) => option
         .setName("query")
         .setDescription("Song name, artist, or JioSaavn URL (album, song, playlist)")
@@ -193,7 +191,7 @@ export const jiosaavnCommand = {
 export const jioCommand = {
     data: new SlashCommandBuilder()
         .setName("jio")
-        .setDescription("Play songs directly from JioSaavn in pristine 320 kbps Studio Master quality (shortcut)")
+        .setDescription("Search JioSaavn and play the highest available catalog quality")
         .addStringOption((option) => option
         .setName("query")
         .setDescription("Song name, artist, or JioSaavn URL (album, song, playlist)")

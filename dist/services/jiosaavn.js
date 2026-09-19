@@ -1,3 +1,5 @@
+import { withTimeout } from "../utils/playback.js";
+import { sameTitle, sameRecording, hasUnrequestedVersion } from "../utils/trackSelection.js";
 import CryptoJS from "crypto-js";
 import { parseTrackTitle } from "../utils/formatters.js";
 /**
@@ -18,7 +20,7 @@ function cleanText(text) {
 /**
  * Decrypts JioSaavn DES-ECB encrypted media URL and upgrades it to 320 kbps studio master
  */
-export function decryptMediaUrl(encryptedUrl) {
+export function decryptMediaUrl(encryptedUrl, has320kbps = false) {
     if (!encryptedUrl)
         return null;
     try {
@@ -31,7 +33,7 @@ export function decryptMediaUrl(encryptedUrl) {
         if (!rawUrl || !rawUrl.startsWith("http"))
             return null;
         // Direct 320 kbps upgrade
-        return rawUrl.replace(/_96\.mp4|_160\.mp4/, "_320.mp4");
+        return has320kbps ? rawUrl.replace(/_96\.mp4|_160\.mp4/, "_320.mp4") : rawUrl;
     }
     catch {
         return null;
@@ -44,16 +46,17 @@ export function parseJioSaavnSong(item) {
     if (!item)
         return null;
     const encUrl = item?.more_info?.encrypted_media_url || item?.encrypted_media_url || item?.encrypted_drm_media_url;
-    const streamUrl = decryptMediaUrl(encUrl);
+    const has320kbps = [item["320kbps"], item.more_info?.["320kbps"]].some(v => v === true || v === "true");
+    const streamUrl = decryptMediaUrl(encUrl, has320kbps);
     if (!streamUrl)
         return null;
     const title = cleanText(item.song || item.title || "");
-    const artist = cleanText(item.singers || item.primary_artists || item.more_info?.singers || item.more_info?.artistMap?.primary_artists?.[0]?.name || item.music || "JioSaavn Artist");
+    const artist = cleanText(item.singers || item.primary_artists || item.more_info?.singers || item.more_info?.artistMap?.primary_artists?.map((a) => a.name).filter(Boolean).join(", ") || item.music || "JioSaavn Artist");
     const album = cleanText(item.album || item.more_info?.album || "");
     const rawImage = item.image || item.more_info?.image || "";
     const artworkUrl = rawImage ? rawImage.replace(/150x150\.jpg|50x50\.jpg/, "500x500.jpg") : "";
     const duration = parseInt(item.duration || item.more_info?.duration || "0", 10);
-    const language = (item.language || "tamil").toLowerCase();
+    const language = (item.language || item.more_info?.language || "global").toLowerCase();
     return {
         id: item.id,
         title,
@@ -64,7 +67,7 @@ export function parseJioSaavnSong(item) {
         artworkUrl,
         streamUrl,
         language,
-        has320kbps: item["320kbps"] === "true" || item.more_info?.["320kbps"] === "true" || item["320kbps"] === true,
+        has320kbps,
         uri: item.perma_url || (item.id ? `https://www.jiosaavn.com/song/${encodeURIComponent(title)}/${item.id}` : ""),
     };
 }
@@ -129,38 +132,7 @@ export function sanitizeMusicQuery(rawTitle, rawAuthor = "") {
  * Checks whether a candidate title matches the target song name, accounting for typos and vowel doubling
  */
 export function isFuzzyTitleMatch(titleA, titleB) {
-    const clean = (s) => s
-        .toLowerCase()
-        .replace(/\|.*/, "")
-        .replace(/\[.*?\]/g, "")
-        .replace(/\(.*?\)/g, "")
-        .replace(/from\s+.*/gi, "")
-        .replace(/video song/gi, "")
-        .replace(/lyric video/gi, "")
-        .replace(/audio song/gi, "")
-        .replace(/[^a-z0-9]/g, "")
-        .trim();
-    const a = clean(titleA);
-    const b = clean(titleB);
-    if (!a || !b)
-        return false;
-    if (a === b)
-        return true;
-    if (a.includes(b) || b.includes(a))
-        return true;
-    // Squash consecutive repeated characters (e.g. "yaarumilla" -> "yarumila")
-    const squash = (s) => s.replace(/(.)\1+/g, "$1");
-    const sa = squash(a);
-    const sb = squash(b);
-    if (sa === sb || sa.includes(sb) || sb.includes(sa))
-        return true;
-    // Substring / character overlap ratio for phonetic spelling differences
-    let matchCount = 0;
-    for (const ch of b) {
-        if (a.includes(ch))
-            matchCount++;
-    }
-    return matchCount / Math.max(a.length, b.length) >= 0.75;
+    return sameTitle(titleA, titleB);
 }
 /**
  * Auto-corrects typos in song queries using real-time search suggestion signals
@@ -201,15 +173,15 @@ export async function getSpellingSuggestion(query) {
 export async function resolveJioSaavnTrack(title, artist = "") {
     const { searchTitle, searchArtist, movieOrAlbum, fullQuery } = sanitizeMusicQuery(title, artist);
     const targetSongName = searchTitle || title;
-    const queriesToTry = [
-        fullQuery,
-        ...(movieOrAlbum && movieOrAlbum.toLowerCase() !== searchTitle.toLowerCase() ? [`${searchTitle} ${movieOrAlbum}`] : []),
-        ...(searchArtist ? [`${searchTitle} ${searchArtist}`] : []),
-        searchTitle,
-    ].filter(Boolean);
+    const queriesToTry = [...new Set([
+            fullQuery,
+            ...(movieOrAlbum && movieOrAlbum.toLowerCase() !== searchTitle.toLowerCase() ? [`${searchTitle} ${movieOrAlbum}`] : []),
+            ...(searchArtist ? [`${searchTitle} ${searchArtist}`] : []),
+            searchTitle,
+        ].filter(Boolean))];
     for (const q of queriesToTry) {
         const results = await searchJioSaavn(q, 5);
-        const match = results.find((t) => isFuzzyTitleMatch(t.title, targetSongName));
+        const match = results.find((t) => sameRecording({ title: t.title, author: t.artist }, { title, author: artist }));
         if (match)
             return match;
     }
@@ -218,48 +190,38 @@ export async function resolveJioSaavnTrack(title, artist = "") {
     if (suggestion) {
         console.log(`[JioSaavn Resolver] Typo detected in "${fullQuery}". Auto-correcting to "${suggestion}"...`);
         const correctedResults = await searchJioSaavn(suggestion, 5);
-        const match = correctedResults.find((t) => isFuzzyTitleMatch(t.title, suggestion) || isFuzzyTitleMatch(t.title, targetSongName));
+        const match = correctedResults.find((t) => sameRecording({ title: t.title, author: t.artist }, { title, author: artist }));
         if (match)
             return match;
     }
     return null;
 }
+/** Filter before ranking: quality never justifies the wrong language or a repeat. */
+export function rankJioSaavnRecommendations(tracks, seedTitle, seedArtist, language, excludeIds, previousTitles) {
+    return tracks.filter(t => !hasUnrequestedVersion(t.title) && Number.isFinite(t.duration) && t.duration >= 60 && t.duration <= 900 &&
+        !!t.artist.trim() && !/^(unknown|jiosaavn artist|various artists)$/i.test(t.artist.trim()) &&
+        !excludeIds.has(t.id) && !excludeIds.has(t.streamUrl) &&
+        (language === "global" || t.language === language) &&
+        ![seedTitle, ...previousTitles].some(title => sameTitle(t.title, title))).sort((a, b) => Number(b.has320kbps) - Number(a.has320kbps) ||
+        Number(!!seedArtist && b.artist.toLowerCase().includes(seedArtist.toLowerCase())) - Number(!!seedArtist && a.artist.toLowerCase().includes(seedArtist.toLowerCase())));
+}
 /**
  * Generates an autoplay recommendation using JioSaavn's catalog in the exact same language and vibe
  */
-export async function findJioSaavnAutoplay(seedTitle, seedArtist, seedLanguage = "tamil", excludeIds = new Set(), previousTitles = []) {
+export async function findJioSaavnAutoplay(seedTitle, seedArtist, seedLanguage = "global", excludeIds = new Set(), previousTitles = []) {
     try {
-        const queries = [
-            `${seedArtist} ${seedLanguage} hits`,
-            `${seedTitle} ${seedLanguage} radio`,
-            `${seedArtist} best ${seedLanguage}`,
-            `${seedLanguage} super hit songs`,
-        ];
+        const language = seedLanguage === "global" ? "" : seedLanguage;
+        const queries = [...new Set([
+                seedArtist && `${seedArtist} ${language}`,
+                `${seedTitle} ${language}`,
+                language && `${language} songs`,
+            ].filter((q) => Boolean(q)))];
         for (const q of queries) {
             const results = await searchJioSaavn(q, 10);
-            const valid = results.filter((t) => {
-                if (excludeIds.has(t.id) || excludeIds.has(t.streamUrl))
-                    return false;
-                if (t.language !== seedLanguage && seedLanguage !== "global")
-                    return false;
-                // Never replay the seed song or a variation with movie suffix
-                if (t.title.toLowerCase() === seedTitle.toLowerCase())
-                    return false;
-                if (isFuzzyTitleMatch(t.title, seedTitle))
-                    return false;
-                // Never replay any song already played or queued in the current session
-                for (const prev of previousTitles) {
-                    if (!prev)
-                        continue;
-                    if (t.title.toLowerCase() === prev.toLowerCase() || isFuzzyTitleMatch(t.title, prev)) {
-                        return false;
-                    }
-                }
-                return true;
-            });
+            const valid = rankJioSaavnRecommendations(results, seedTitle, seedArtist, seedLanguage, excludeIds, previousTitles);
             if (valid.length > 0) {
                 // Pick randomly from top 3 to keep discovery fresh
-                return valid[Math.floor(Math.random() * Math.min(3, valid.length))];
+                return valid[0];
             }
         }
     }
@@ -305,20 +267,14 @@ export async function resolveJioSaavnUrl(url) {
             const apiUrl = `https://www.jiosaavn.com/api.php?__call=webapi.get&token=${encodeURIComponent(token)}&type=song&_format=json&_marker=0&cc=in&includeMetaTags=1`;
             const data = await safeJsonFetch(apiUrl, { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" }, 5000);
             if (data) {
-                const firstVal = Object.values(data)[0];
-                if (firstVal) {
-                    const track = parseJioSaavnSong(firstVal);
-                    if (track)
+                const songs = Array.isArray(data.songs) ? data.songs : Array.isArray(data.list) ? data.list : Object.values(data);
+                for (const item of songs) {
+                    const track = parseJioSaavnSong(item);
+                    if (track && track.uri && new URL(track.uri).pathname.replace(/\/$/, "") === parsed.pathname.replace(/\/$/, ""))
                         return { type: "track", track };
                 }
             }
-            // Fallback: search using slug name if token failed
-            if (slug) {
-                const slugQuery = slug.replace(/-/g, " ").trim();
-                const fallback = await resolveJioSaavnTrack(slugQuery);
-                if (fallback)
-                    return { type: "track", track: fallback };
-            }
+            return null;
         }
         if (isAlbum) {
             const apiUrl = `https://www.jiosaavn.com/api.php?__call=webapi.get&token=${encodeURIComponent(token)}&type=album&_format=json&_marker=0&cc=in`;
@@ -356,30 +312,28 @@ export async function resolveJioSaavnUrl(url) {
 export async function loadJioSaavnAsLavalinkTrack(jioTrack, requester, candidateNodes) {
     if (!jioTrack?.streamUrl)
         return null;
-    // Prioritize Kasawa-MasterNode (supports direct HTTP 320 kbps streaming)
-    const sortedNodes = [...candidateNodes].sort((a, b) => {
-        if (a?.id === "Kasawa-MasterNode")
-            return -1;
-        if (b?.id === "Kasawa-MasterNode")
-            return 1;
-        return 0;
-    });
+    // Prefer the player's node and avoid repeating the same HTTP load on duplicate nodes.
+    const sortedNodes = candidateNodes.filter((n, i, all) => n?.connected && all.findIndex(x => x?.id === n.id) === i);
     for (const node of sortedNodes) {
         if (!node || !node.connected)
             continue;
         try {
-            const res = await node.search({ query: jioTrack.streamUrl }, requester);
+            const res = await withTimeout(node.search({ query: jioTrack.streamUrl }, requester), 4000);
             if (res?.tracks?.length && res.loadType !== "empty" && res.loadType !== "error") {
-                const trk = res.tracks[0];
+                const trk = res.tracks.find((t) => t.info?.identifier === jioTrack.streamUrl || t.info?.uri === jioTrack.streamUrl);
+                if (!trk)
+                    continue;
                 trk.info.title = jioTrack.title;
                 trk.info.author = jioTrack.artist;
                 trk.info.artworkUrl = jioTrack.artworkUrl;
                 trk.info.uri = jioTrack.uri;
-                trk.info.sourceName = "jiosaavn";
+                // Keep the actual HTTP sourceName; userData describes the catalog.
                 trk.userData = {
                     ...(trk.userData || {}),
                     isJioSaavn: true,
-                    quality: "320kbps",
+                    jioId: jioTrack.id,
+                    streamUri: jioTrack.streamUrl,
+                    quality: jioTrack.has320kbps ? "320kbps" : "unknown",
                     album: jioTrack.album,
                     year: jioTrack.year,
                     language: jioTrack.language,

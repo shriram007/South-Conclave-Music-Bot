@@ -7,14 +7,14 @@ export const qualityCommand = {
         .setDescription("Inspect audio bitrate, server boost tier, and studio playback fidelity"),
     async execute(interaction) {
         const member = interaction.member;
-        const voiceChannel = member?.voice?.channel;
+        const voiceChannel = interaction.guild?.members.me?.voice.channel || member?.voice?.channel;
         const player = lavalink.getPlayer(interaction.guildId);
         const current = player?.queue.current;
-        const currentSrc = current ? getSourceInfo(current.info.sourceName, current.info.uri) : null;
+        const currentSrc = current ? getSourceInfo(current.info.sourceName, current.info.uri, current.userData) : null;
         const embed = new EmbedBuilder()
             .setColor(0x00d26a)
             .setTitle("💎 Studio Audio Quality & Bitrate Inspector")
-            .setDescription("To get **Apple Music / Spotify 300+ kbps playback quality** in Discord, both the **Audio Engine** and the **Discord Voice Channel** must be running at maximum bitrate.");
+            .setDescription("Source quality, audio-node settings, and the Discord voice channel all affect playback. Catalog search does not verify stream bitrate or lossless audio.");
         if (voiceChannel) {
             const info = getChannelBitrateInfo(voiceChannel);
             embed.addFields([
@@ -50,10 +50,11 @@ export const qualityCommand = {
         embed.addFields([
             {
                 name: "🎛️ Audio Engine Pipeline",
-                value: "• **Codec:** Opus Stereo (48,000 Hz Native)\n" +
-                    "• **Resampling Quality:** Highest (libsamplerate)\n" +
-                    "• **Opus Complexity:** Level 10 (Maximum studio fidelity)\n" +
-                    "• **Jitter Buffer:** 5000ms studio pre-buffering (Zero stutter)",
+                value: `• **Node:** ${player?.node?.id || "Not connected"}\n` +
+                    `• **EQ:** ${player?.getData("eq_preset") || "Normal (Flat)"}\n` +
+                    `• **Normalization:** ${player?.getData("normalized") ? "Enabled" : "Off"}\n` +
+                    "• Encoder quality and buffering are controlled by the audio node.\n" +
+                    "• Source codec and bitrate are not exposed by standard track metadata.",
                 inline: false,
             },
             {
@@ -68,10 +69,17 @@ export const qualityCommand = {
                 value: "• **Free / Standard:** Up to `96 kbps`\n" +
                     "• **Tier 1 (2 Boosts):** Up to `128 kbps`\n" +
                     "• **Tier 2 (7 Boosts):** Up to `256 kbps`\n" +
-                    "• **Tier 3 (14 Boosts) / Partnered:** Up to `384 kbps` *(True Studio Hi-Fi)*",
+                    "• **Tier 3 (14 Boosts) / Partnered:** Up to `384 kbps` ",
                 inline: false,
             },
         ]);
+        if (current) {
+            embed.addFields({ name: "Recording identity", value: `Playing ID: \`${current.info.identifier}\`` +
+                    (current.userData?.requestedVideoId ? `\nRequested video: \`${current.userData.requestedVideoId}\`` : ""), inline: false });
+        }
+        const youtubePlugin = player?.node?.info?.plugins?.find(p => /youtube/i.test(p.name));
+        if (youtubePlugin)
+            embed.addFields({ name: "YouTube source plugin", value: `${youtubePlugin.name} ${youtubePlugin.version}`, inline: false });
         embed.setFooter({
             text: "How to increase bitrate: Right click Voice Channel → Edit Channel → Overview → Bitrate slider",
         });
