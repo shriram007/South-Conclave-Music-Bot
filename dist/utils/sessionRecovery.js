@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { getBestNode, lavalink } from "../lavalink/client.js";
 import { autoDeleteMessage } from "./cleanup.js";
 import { formatDuration } from "./formatters.js";
+import { is247Enabled } from "./twentyFourSeven.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_DIR = path.resolve(__dirname, "../../data");
@@ -130,6 +131,13 @@ export async function restoreSessions(client) {
                 const permissions = voiceChannel.permissionsFor(client.user);
                 if (!permissions?.has("Connect") || !permissions?.has("Speak"))
                     continue;
+                // Do not resume music in an empty voice channel unless 24/7 mode is explicitly enabled
+                const humanMembers = voiceChannel.members.filter((m) => !m.user.bot);
+                if (humanMembers.size === 0 && !is247Enabled(session.guildId)) {
+                    console.log(`[Session Recovery] Discarding session for guild "${guild.name}" — voice channel is empty.`);
+                    clearGuildSession(session.guildId);
+                    continue;
+                }
                 const targetNode = getBestNode();
                 let player = lavalink.getPlayer(session.guildId);
                 if (!player) {
