@@ -65,16 +65,20 @@ export function createFlaviProgressBar(currentMs, totalMs, barLength = 14) {
 /**
  * Return friendly badges and bitrate descriptions for various audio sources
  */
-export function getSourceInfo(sourceName) {
+export function getSourceInfo(sourceName, uri) {
     const src = (sourceName || "").toLowerCase();
+    const rawUri = (uri || "").toLowerCase();
+    if (src === "jiosaavn" ||
+        rawUri.includes("saavncdn.com") ||
+        rawUri.includes("jiosaavn.com")) {
+        return {
+            name: "JioSaavn Studio Master",
+            quality: "320 kbps AAC Studio Audio",
+            badge: "💎 **JioSaavn Studio** `320 kbps AAC`",
+            color: 0x2bc5b4,
+        };
+    }
     switch (src) {
-        case "jiosaavn":
-            return {
-                name: "JioSaavn Hi-Fi",
-                quality: "320 kbps Studio Quality",
-                badge: "💎 **JioSaavn Hi-Fi** `320 kbps HQ`",
-                color: 0x2bc5b4,
-            };
         case "deezer":
             return {
                 name: "Deezer Hi-Fi",
@@ -317,7 +321,7 @@ export function detectTrackLanguage(title, author = "") {
         return "punjabi";
     // 4. Prominent Artists, Composers, and Movie Keywords
     // Tamil
-    if (/\b(anirudh|yuvan|ilayaraja|ilayaraaja|harris jayaraj|santhosh narayanan|sa-na|dhanush|vijay sethupathi|trisha|govind vasantha|sid sriram|u1|spb|karthik|chinmayi|naresh iyer|gv prakash|g\.v\. prakash|d imman|vijay|ajith|suriya|rajinikanth|kamal haasan|vignesh shivan|sean roldan|pradeep kumar|dhee|haricharan|shweta mohan|vijay antony|deva|vidyasagar|stephen zechariah|keba jeremiah|kaadhal|kadhal|kadhale|kaathalae|kanne|kannamma|vaathi|mersal|leo|jailer|master|vikram|kaaviyathalaivan|aarambam|asuran|karnan|raayan|goat|anbe shivam|kandukondain|jeans|alaipayuthey|vinnaithaandi|mudhalvan|sivaji)\b/i.test(text)) {
+    if (/\b(anirudh|yuvan|ilayaraja|ilayaraaja|harris jayaraj|santhosh narayanan|sa-na|dhanush|vijay sethupathi|trisha|govind vasantha|sid sriram|u1|spb|karthik|chinmayi|naresh iyer|gv prakash|g\.v\. prakash|d imman|vijay|ajith|suriya|rajinikanth|kamal haasan|vignesh shivan|sean roldan|pradeep kumar|dhee|haricharan|shweta mohan|vijay antony|deva|vidyasagar|stephen zechariah|keba jeremiah|ar rahman|a\.r\. rahman|a\.r\.rahman|rahman|roja|bombay|kandukondain|alaipayuthey|uzhavan|vinnaithaandi|mudhalvan|sivaji|gentleman|kadhal|kadhale|kaathalae|kanne|kannamma|vaathi|mersal|leo|jailer|master|vikram|kaaviyathalaivan|aarambam|asuran|karnan|raayan|goat|anbe shivam|jeans|vinnai|munbe|vaarayo|idhazhin|mazhai|yennai|konjam|kadhal|sol|en kadhal|yen kadhal|thalli pogathey|neethanae|nenjukulle|kannaana|rowdy baby|chellamma|naanum rowdy)\b/i.test(text)) {
         return "tamil";
     }
     // Telugu

@@ -5,6 +5,7 @@ import { getFavorites } from "../utils/favorites.js";
 import { formatDuration, getSourceInfo, getTrackRelevanceScore, isRelevantTrack } from "../utils/formatters.js";
 import { getPlaylist, getUserPlaylists } from "../utils/playlists.js";
 import { getMusicSuggestions } from "../utils/suggestions.js";
+import { loadJioSaavnAsLavalinkTrack, resolveJioSaavnTrack } from "../services/jiosaavn.js";
 async function resolveSpotifyTrack(url) {
     try {
         const cleanUrl = url.split("?")[0];
@@ -246,6 +247,25 @@ export async function smartSearch(player, query, isUrl, user) {
         console.log(`[SmartSearch] Returning best fuzzy candidate "${bestCandidate.tracks[0].info.title}" (score: ${bestScore.toFixed(2)}) on node "${bestCandidate.node.id}"`);
         return { ...bestCandidate.res, tracks: bestCandidate.tracks };
     }
+    // 5. Try JioSaavn 320 kbps Studio Audio fallback (unrestricted, authentic 320 kbps AAC)
+    try {
+        const jioTrack = await resolveJioSaavnTrack(query);
+        if (jioTrack) {
+            const candidateNodes = [
+                ...(player.node?.connected ? [player.node] : []),
+                ...Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected && n.id !== player.node?.id),
+            ];
+            const converted = await loadJioSaavnAsLavalinkTrack(jioTrack, user, candidateNodes);
+            if (converted) {
+                syncPlayerNode(converted.node);
+                console.log(`[SmartSearch] Resolved "${converted.track.info.title}" via JioSaavn 320kbps Studio Master on node "${converted.node.id}"`);
+                return { loadType: "track", tracks: [converted.track] };
+            }
+        }
+    }
+    catch (e) {
+        console.warn("[SmartSearch] JioSaavn fallback error:", e?.message || e);
+    }
     return null;
 }
 export const playCommand = {
@@ -333,6 +353,51 @@ export const playCommand = {
                 }
             }
         }
+        // Handle explicit JioSaavn query or URL (e.g. /play jio:Munbe Vaa or saavn:track or jiosaavn link)
+        if (rawQuery.startsWith("jio:") || rawQuery.startsWith("saavn:") || /jiosaavn\.com\/(song|album)/i.test(rawQuery)) {
+            const cleanTerm = rawQuery.replace(/^(jio|saavn):/i, "").trim();
+            const jioTrack = await resolveJioSaavnTrack(cleanTerm);
+            if (jioTrack) {
+                const candidateNodes = [
+                    ...(player.node?.connected ? [player.node] : []),
+                    ...Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected && n.id !== player.node?.id),
+                ];
+                const converted = await loadJioSaavnAsLavalinkTrack(jioTrack, interaction.user, candidateNodes);
+                if (converted) {
+                    if (player.node && player.node.id !== converted.node.id && !player.playing) {
+                        await player.changeNode(converted.node, false).catch(() => { });
+                    }
+                    const track = converted.track;
+                    purgeAutoplayTracks(player);
+                    await player.queue.add(track);
+                    if (!player.playing && !player.paused) {
+                        await player.play();
+                        await interaction.editReply(`▶️ Playing **[${track.info.title}](${track.info.uri})** by **${track.info.author}** [💎 JioSaavn 320 kbps AAC]`);
+                        autoDeleteReply(interaction, 10000);
+                    }
+                    else {
+                        await updateActivePlayerMessage(player);
+                        const source = getSourceInfo(track.info.sourceName, track.info.uri);
+                        const position = player.queue.tracks.length;
+                        const embed = new EmbedBuilder()
+                            .setColor(source.color)
+                            .setTitle("🎶 Added to Queue")
+                            .setDescription(`**[${track.info.title}](${track.info.uri})**`)
+                            .addFields([
+                            { name: "Artist", value: track.info.author || "Unknown Artist", inline: true },
+                            { name: "Duration", value: formatDuration(track.info.duration || 0), inline: true },
+                            { name: "Position in Queue", value: `#${position}`, inline: true },
+                            { name: "Source Fidelity", value: source.badge, inline: true },
+                        ]);
+                        if (track.info.artworkUrl)
+                            embed.setThumbnail(track.info.artworkUrl);
+                        await interaction.editReply({ embeds: [embed] });
+                        autoDeleteReply(interaction, 10000);
+                    }
+                    return;
+                }
+            }
+        }
         try {
             const { query, isUrl } = await resolveTrackQuery(rawQuery);
             let res = await smartSearch(player, query, isUrl, interaction.user);
@@ -397,7 +462,7 @@ export const playCommand = {
                     await updateActivePlayerMessage(player);
                 }
                 const playlistTitle = res.playlist?.name || res.playlist?.title || "Playlist";
-                const source = getSourceInfo(res.tracks[0]?.info.sourceName);
+                const source = getSourceInfo(res.tracks[0]?.info.sourceName, res.tracks[0]?.info.uri);
                 const embed = new EmbedBuilder()
                     .setColor(source.color)
                     .setTitle("🎶 Playlist Queued")
@@ -430,7 +495,7 @@ export const playCommand = {
             }
             else {
                 await updateActivePlayerMessage(player);
-                const source = getSourceInfo(track.info.sourceName);
+                const source = getSourceInfo(track.info.sourceName, track.info.uri);
                 const position = player.queue.tracks.length;
                 const embed = new EmbedBuilder()
                     .setColor(source.color)

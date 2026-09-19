@@ -18,7 +18,7 @@ export const qualityCommand = {
 
     const player = lavalink.getPlayer(interaction.guildId!);
     const current = player?.queue.current;
-    const currentSrc = current ? getSourceInfo(current.info.sourceName) : null;
+    const currentSrc = current ? getSourceInfo(current.info.sourceName, current.info.uri) : null;
 
     const embed = new EmbedBuilder()
       .setColor(0x00d26a)

@@ -84,17 +84,24 @@ export function createFlaviProgressBar(
 /**
  * Return friendly badges and bitrate descriptions for various audio sources
  */
-export function getSourceInfo(sourceName?: string): { name: string; quality: string; badge: string; color: number } {
+export function getSourceInfo(sourceName?: string, uri?: string): { name: string; quality: string; badge: string; color: number } {
   const src = (sourceName || "").toLowerCase();
+  const rawUri = (uri || "").toLowerCase();
+
+  if (
+    src === "jiosaavn" ||
+    rawUri.includes("saavncdn.com") ||
+    rawUri.includes("jiosaavn.com")
+  ) {
+    return {
+      name: "JioSaavn Studio Master",
+      quality: "320 kbps AAC Studio Audio",
+      badge: "💎 **JioSaavn Studio** `320 kbps AAC`",
+      color: 0x2bc5b4,
+    };
+  }
 
   switch (src) {
-    case "jiosaavn":
-      return {
-        name: "JioSaavn Hi-Fi",
-        quality: "320 kbps Studio Quality",
-        badge: "💎 **JioSaavn Hi-Fi** `320 kbps HQ`",
-        color: 0x2bc5b4,
-      };
     case "deezer":
       return {
         name: "Deezer Hi-Fi",

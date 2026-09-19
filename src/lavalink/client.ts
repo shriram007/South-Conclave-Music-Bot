@@ -18,6 +18,7 @@ import { detectTrackLanguage, getChannelBitrateInfo, isLanguageCompatible, isRel
 import { is247Enabled } from "../utils/twentyFourSeven.js";
 import { clearGuildSession, saveActiveSessions } from "../utils/sessionRecovery.js";
 import { applyLoudnessNormalization } from "../commands/normalize.js";
+import { findJioSaavnAutoplay, loadJioSaavnAsLavalinkTrack, resolveJioSaavnTrack } from "../services/jiosaavn.js";
 
 export let lavalink: LavalinkManager;
 export let discordClient: Client;
@@ -148,20 +149,20 @@ export async function findAutoplayRecommendation(player: Player, seedTrack: Trac
 
   const connectedNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected);
   const healthyNodes = connectedNodes.filter((n) => isNodeHealthy(n.id));
+  const kasawaNode = healthyNodes.find((n) => n.id === "Kasawa-MasterNode");
   const milloNode = healthyNodes.find((n) => n.id === "Millo-BackupNode");
+  const serenetiaNode = healthyNodes.find((n) => n.id === "Serenetia-AuxNode");
   const jirayuNode = healthyNodes.find((n) => n.id === "Jirayu-AuxNode");
-  const triniumFast = healthyNodes.find((n) => n.id === "Trinium-FastNode");
-  const triniumStudio = healthyNodes.find((n) => n.id === "Trinium-Studio");
-  const otherHealthy = healthyNodes.filter((n) => n.id !== "Millo-BackupNode" && n.id !== "Trinium-FastNode" && n.id !== "Trinium-Studio" && n.id !== "Jirayu-AuxNode");
+  const otherHealthy = healthyNodes.filter((n) => n.id !== "Kasawa-MasterNode" && n.id !== "Millo-BackupNode" && n.id !== "Serenetia-AuxNode" && n.id !== "Jirayu-AuxNode");
   const degradedList = connectedNodes.filter((n) => !isNodeHealthy(n.id));
 
-  // Priority: Jirayu (proxy) > Trinium nodes > other > Millo (last, YT-flagged)
+  // Priority: Kasawa (supports direct 320k JioSaavn + YT/Spotify) > Millo > Serenetia > Jirayu
   const nodesToTry = healthyNodes.length > 0 ? [
-    ...(jirayuNode ? [jirayuNode] : []),
-    ...(triniumFast ? [triniumFast] : []),
-    ...(triniumStudio ? [triniumStudio] : []),
-    ...otherHealthy,
+    ...(kasawaNode ? [kasawaNode] : []),
     ...(milloNode ? [milloNode] : []),
+    ...(serenetiaNode ? [serenetiaNode] : []),
+    ...(jirayuNode ? [jirayuNode] : []),
+    ...otherHealthy,
   ] : degradedList;
 
   const historyIds = new Set(player.queue.previous.map((t) => t.info.identifier).filter((id): id is string => Boolean(id)));
@@ -284,13 +285,32 @@ export async function findAutoplayRecommendation(player: Player, seedTrack: Trac
     }
   }
 
+  // Strategy 3: JioSaavn 320 kbps Autoplay Discovery (unrestricted, authentic 320 kbps studio audio)
+  if (!foundCandidate) {
+    try {
+      const jioRec = await findJioSaavnAutoplay(cleanTitle, rawAuthor, seedLang, historyIds);
+      if (jioRec) {
+        const jioCandidate = await loadJioSaavnAsLavalinkTrack(jioRec, seedTrack.requester, [
+          player.node,
+          ...nodesToTry,
+        ]);
+        if (jioCandidate) {
+          foundCandidate = jioCandidate.track;
+          console.log(`[Smart Autoplay] JioSaavn 320kbps discovery candidate: "${foundCandidate?.info?.title}" by "${foundCandidate?.info?.author}"`);
+        }
+      }
+    } catch (e) {
+      console.warn("[Smart Autoplay] JioSaavn autoplay discovery notice:", e);
+    }
+  }
+
   if (!foundCandidate) return null;
 
-  // Guarantee official 256kbps YouTube Music Studio Master fidelity
-  // Use best non-Millo node for HQ search — Jirayu/Trinium have proxy coverage and won't 403
+  // Guarantee official 256kbps YouTube Music Studio Master fidelity for non-Jio tracks
   let studioMasterTrack: Track = foundCandidate;
-  const hqSearchNode = jirayuNode || triniumFast || triniumStudio || nodesToTry[0];
-  if (hqSearchNode) {
+  const isJio = Boolean((foundCandidate as any).userData?.isJioSaavn);
+  const hqSearchNode = kasawaNode || milloNode || nodesToTry[0];
+  if (!isJio && hqSearchNode) {
     try {
       const hqQuery = `${(foundCandidate.info.title || "").replace(/\|.*/, "").replace(/\[.*?\]/g, "").replace(/\(.*?\)/g, "").trim()} ${(foundCandidate.info.author || "").replace(/- Topic/gi, "").trim()}`.trim();
       const hqRes: any = await hqSearchNode.search({
@@ -386,8 +406,20 @@ export function getMasterNodeConfigs(): LavalinkNodeOptions[] {
     });
   }
 
-  // Priority 1: Millo-BackupNode (verified online, ultra-fast 750ms, 256k YouTube Music & Spotify HQ)
+  // Priority 1: Kasawa-MasterNode (verified online, supports direct HTTP 320k JioSaavn streaming, YT, Spotify, SoundCloud)
   configs.push(
+    {
+      authorization: "youshallnotpass",
+      host: "lava2.kasawa.pro",
+      port: 2334,
+      secure: false,
+      id: "Kasawa-MasterNode",
+      retryAmount: 1000,
+      retryDelay: 5000,
+      retryTimespan: 180000,
+      requestSignalTimeoutMS: 7000,
+      enablePingOnStatsCheck: true,
+    },
     {
       authorization: "https://discord.gg/mjS5J2K3ep",
       host: "lava-v4.millohost.my.id",
@@ -401,23 +433,11 @@ export function getMasterNodeConfigs(): LavalinkNodeOptions[] {
       enablePingOnStatsCheck: true,
     },
     {
-      authorization: "free",
-      host: "lavalink-v4.triniumhost.com",
+      authorization: "https://seretia.link/discord",
+      host: "lavalinkv4.serenetia.com",
       port: 443,
       secure: true,
-      id: "Trinium-FastNode",
-      retryAmount: 1000,
-      retryDelay: 5000,
-      retryTimespan: 180000,
-      requestSignalTimeoutMS: 7000,
-      enablePingOnStatsCheck: true,
-    },
-    {
-      authorization: "free",
-      host: "nodelink.triniumhost.com",
-      port: 443,
-      secure: true,
-      id: "Trinium-Studio",
+      id: "Serenetia-AuxNode",
       retryAmount: 1000,
       retryDelay: 5000,
       retryTimespan: 180000,
@@ -923,21 +943,21 @@ export function initLavalink(client: Client) {
 
         console.log(`[Universal Recovery] Stream restricted for "${rawTitle}" (ID: ${failedId}). Attempt #${recoveryAttempts} auto-recovering as "${fallbackQuery}"...`);
 
-        // Prioritize healthy alternate nodes (Jirayu proxy, Trinium) over the node that just failed
+        // Prioritize healthy alternate nodes over the node that just failed
         const connectedNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected && !n.id.includes("Custom"));
         const healthyOtherNodes = connectedNodes.filter((n) => isNodeHealthy(n.id) && n.id !== player.node.id);
-        const jirayuNode = healthyOtherNodes.find((n) => n.id === "Jirayu-AuxNode");
-        const triniumFast = healthyOtherNodes.find((n) => n.id === "Trinium-FastNode");
-        const triniumStudio = healthyOtherNodes.find((n) => n.id === "Trinium-Studio");
+        const kasawaNode = healthyOtherNodes.find((n) => n.id === "Kasawa-MasterNode");
         const milloNode = healthyOtherNodes.find((n) => n.id === "Millo-BackupNode");
-        const otherHealthy = healthyOtherNodes.filter((n) => n.id !== "Millo-BackupNode" && n.id !== "Trinium-FastNode" && n.id !== "Trinium-Studio" && n.id !== "Jirayu-AuxNode");
+        const serenetiaNode = healthyOtherNodes.find((n) => n.id === "Serenetia-AuxNode");
+        const jirayuNode = healthyOtherNodes.find((n) => n.id === "Jirayu-AuxNode");
+        const otherHealthy = healthyOtherNodes.filter((n) => n.id !== "Kasawa-MasterNode" && n.id !== "Millo-BackupNode" && n.id !== "Serenetia-AuxNode" && n.id !== "Jirayu-AuxNode");
         const degradedList = connectedNodes.filter((n) => !isNodeHealthy(n.id) && n.id !== player.node.id);
 
         const nodesToTry = [
-          ...(jirayuNode ? [jirayuNode] : []),
-          ...(triniumFast ? [triniumFast] : []),
-          ...(triniumStudio ? [triniumStudio] : []),
+          ...(kasawaNode ? [kasawaNode] : []),
           ...(milloNode ? [milloNode] : []),
+          ...(serenetiaNode ? [serenetiaNode] : []),
+          ...(jirayuNode ? [jirayuNode] : []),
           ...otherHealthy,
           ...degradedList,
           player.node, // current failing node is only last resort
@@ -946,17 +966,38 @@ export function initLavalink(client: Client) {
         let recoveredTrack: Track | null = null;
         let targetNode = player.node;
 
+        // ── TIER 0: JioSaavn 320 kbps Studio Audio Recovery (<500ms) ──
+        // Completely circumvents YouTube datacenter 403 / IP rate limits and streams bit-perfect 320 kbps AAC audio!
+        try {
+          const jioMatch = await resolveJioSaavnTrack(cleanTitle, cleanAuthor);
+          if (jioMatch) {
+            const jioLoaded = await loadJioSaavnAsLavalinkTrack(jioMatch, track.requester, [
+              player.node,
+              ...(kasawaNode ? [kasawaNode] : []),
+              ...nodesToTry,
+            ]);
+            if (jioLoaded) {
+              recoveredTrack = jioLoaded.track;
+              targetNode = jioLoaded.node;
+              console.log(`[Universal Recovery] Recovered "${rawTitle}" via JioSaavn 320kbps Studio Master on node "${targetNode.id}"`);
+            }
+          }
+        } catch (err) {
+          console.warn("[Universal Recovery] JioSaavn recovery attempt error:", err);
+        }
+
         // On attempt #2+, prioritize SoundCloud to bypass YouTube datacenter IP blocks completely
         const trySoundCloudFirst = recoveryAttempts > 1;
 
         // ── FAST PATH: try the same track URL on a different healthy node (~500ms) ──
         // This is the fastest recovery — no search needed, just re-resolve on a clean IP.
         const fastNodes = [
+          ...(kasawaNode ? [kasawaNode] : []),
+          ...(milloNode ? [milloNode] : []),
+          ...(serenetiaNode ? [serenetiaNode] : []),
           ...(jirayuNode ? [jirayuNode] : []),
-          ...(triniumFast ? [triniumFast] : []),
-          ...(triniumStudio ? [triniumStudio] : []),
         ];
-        if (track.info.uri && fastNodes.length > 0 && !trySoundCloudFirst) {
+        if (!recoveredTrack && track.info.uri && fastNodes.length > 0 && !trySoundCloudFirst) {
           for (const node of fastNodes) {
             try {
               const directRes: any = await Promise.race([
@@ -1004,7 +1045,7 @@ export function initLavalink(client: Client) {
             if (result.status === "fulfilled") {
               recoveredTrack = result.value.track;
               targetNode = result.value.node;
-              console.log(`[Universal Recovery] Found alternative on node "${targetNode.id}": "${recoveredTrack.info.title}"`);
+              console.log(`[Universal Recovery] Found alternative on node "${targetNode.id}": "${recoveredTrack?.info.title}"`);
               break;
             }
           }
@@ -1095,7 +1136,9 @@ export function initLavalink(client: Client) {
 
           if (player.textChannelId) {
             const channel = client.channels.cache.get(player.textChannelId) as TextChannel | undefined;
-            channel?.send(`🔄 **Auto-Recovered:** Restriction detected on video. Swapped to high-fidelity stream: **[${recoveredTrack.info.title}](${recoveredTrack.info.uri})**`).then((msg) => autoDeleteMessage(msg, 6000)).catch(() => {});
+            const isJio = Boolean((recoveredTrack as any).userData?.isJioSaavn);
+            const streamLabel = isJio ? "💎 **JioSaavn Studio Master (320 kbps AAC)**" : "high-fidelity stream";
+            channel?.send(`🔄 **Auto-Recovered:** Restriction detected on video. Swapped to ${streamLabel}: **[${recoveredTrack.info.title}](${recoveredTrack.info.uri})**`).then((msg) => autoDeleteMessage(msg, 7000)).catch(() => {});
           }
 
           setTimeout(() => {

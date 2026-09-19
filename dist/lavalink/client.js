@@ -7,6 +7,7 @@ import { detectTrackLanguage, getChannelBitrateInfo, isLanguageCompatible, isRel
 import { is247Enabled } from "../utils/twentyFourSeven.js";
 import { clearGuildSession, saveActiveSessions } from "../utils/sessionRecovery.js";
 import { applyLoudnessNormalization } from "../commands/normalize.js";
+import { findJioSaavnAutoplay, loadJioSaavnAsLavalinkTrack, resolveJioSaavnTrack } from "../services/jiosaavn.js";
 export let lavalink;
 export let discordClient;
 // Track active player messages so we can update or clean them up
@@ -129,15 +130,18 @@ export async function findAutoplayRecommendation(player, seedTrack) {
     console.log(`[Smart Autoplay] Finding AI radio recommendations based on "${cleanTitle}" by "${rawAuthor}" (Language: ${seedLang.toUpperCase()})...`);
     const connectedNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected);
     const healthyNodes = connectedNodes.filter((n) => isNodeHealthy(n.id));
+    const kasawaNode = healthyNodes.find((n) => n.id === "Kasawa-MasterNode");
     const milloNode = healthyNodes.find((n) => n.id === "Millo-BackupNode");
-    const triniumFast = healthyNodes.find((n) => n.id === "Trinium-FastNode");
-    const triniumStudio = healthyNodes.find((n) => n.id === "Trinium-Studio");
-    const otherHealthy = healthyNodes.filter((n) => n.id !== "Millo-BackupNode" && n.id !== "Trinium-FastNode" && n.id !== "Trinium-Studio");
+    const serenetiaNode = healthyNodes.find((n) => n.id === "Serenetia-AuxNode");
+    const jirayuNode = healthyNodes.find((n) => n.id === "Jirayu-AuxNode");
+    const otherHealthy = healthyNodes.filter((n) => n.id !== "Kasawa-MasterNode" && n.id !== "Millo-BackupNode" && n.id !== "Serenetia-AuxNode" && n.id !== "Jirayu-AuxNode");
     const degradedList = connectedNodes.filter((n) => !isNodeHealthy(n.id));
+    // Priority: Kasawa (supports direct 320k JioSaavn + YT/Spotify) > Millo > Serenetia > Jirayu
     const nodesToTry = healthyNodes.length > 0 ? [
+        ...(kasawaNode ? [kasawaNode] : []),
         ...(milloNode ? [milloNode] : []),
-        ...(triniumFast ? [triniumFast] : []),
-        ...(triniumStudio ? [triniumStudio] : []),
+        ...(serenetiaNode ? [serenetiaNode] : []),
+        ...(jirayuNode ? [jirayuNode] : []),
         ...otherHealthy,
     ] : degradedList;
     const historyIds = new Set(player.queue.previous.map((t) => t.info.identifier).filter((id) => Boolean(id)));
@@ -240,20 +244,40 @@ export async function findAutoplayRecommendation(player, seedTrack) {
             }
         }
     }
+    // Strategy 3: JioSaavn 320 kbps Autoplay Discovery (unrestricted, authentic 320 kbps studio audio)
+    if (!foundCandidate) {
+        try {
+            const jioRec = await findJioSaavnAutoplay(cleanTitle, rawAuthor, seedLang, historyIds);
+            if (jioRec) {
+                const jioCandidate = await loadJioSaavnAsLavalinkTrack(jioRec, seedTrack.requester, [
+                    player.node,
+                    ...nodesToTry,
+                ]);
+                if (jioCandidate) {
+                    foundCandidate = jioCandidate.track;
+                    console.log(`[Smart Autoplay] JioSaavn 320kbps discovery candidate: "${foundCandidate?.info?.title}" by "${foundCandidate?.info?.author}"`);
+                }
+            }
+        }
+        catch (e) {
+            console.warn("[Smart Autoplay] JioSaavn autoplay discovery notice:", e);
+        }
+    }
     if (!foundCandidate)
         return null;
-    // Guarantee official 256kbps YouTube Music Studio Master fidelity
+    // Guarantee official 256kbps YouTube Music Studio Master fidelity for non-Jio tracks
     let studioMasterTrack = foundCandidate;
-    const milloOrBest = milloNode || (getBestNode() ? lavalink.nodeManager.nodes.get(getBestNode()) : null) || nodesToTry[0];
-    if (milloOrBest) {
+    const isJio = Boolean(foundCandidate.userData?.isJioSaavn);
+    const hqSearchNode = kasawaNode || milloNode || nodesToTry[0];
+    if (!isJio && hqSearchNode) {
         try {
             const hqQuery = `${(foundCandidate.info.title || "").replace(/\|.*/, "").replace(/\[.*?\]/g, "").replace(/\(.*?\)/g, "").trim()} ${(foundCandidate.info.author || "").replace(/- Topic/gi, "").trim()}`.trim();
-            const hqRes = await milloOrBest.search({
+            const hqRes = await hqSearchNode.search({
                 query: hqQuery,
                 source: "ytmsearch",
             }, seedTrack.requester).catch(() => null);
             if (hqRes?.tracks?.length && !restrictedTrackIds.has(hqRes.tracks[0].info.identifier)) {
-                console.log(`[Smart Autoplay] Upgraded "${foundCandidate.info.title}" to official 256kbps YouTube Music master: "${hqRes.tracks[0].info.title}"`);
+                console.log(`[Smart Autoplay] Upgraded "${foundCandidate.info.title}" to official 256kbps YouTube Music master: "${hqRes.tracks[0].info.title}" via ${hqSearchNode.id}`);
                 studioMasterTrack = hqRes.tracks[0];
             }
         }
@@ -261,11 +285,8 @@ export async function findAutoplayRecommendation(player, seedTrack) {
             console.warn("[Smart Autoplay] Studio master upgrade notice:", e);
         }
     }
-    // Ensure player is operating on HQ node so stream never throttles
-    if (milloOrBest && player.node && player.node.id !== milloOrBest.id && (!player.node.connected || !isNodeHealthy(player.node.id) || player.node.id !== "Millo-BackupNode")) {
-        console.log(`[Smart Autoplay] Ensuring player is operating on HQ node "${milloOrBest.id}"...`);
-        await player.changeNode(milloOrBest, false).catch(() => { });
-    }
+    // Do NOT force-migrate the player to a different node here — the player's current
+    // healthy node is already streaming fine. Migration only happens in trackError recovery.
     studioMasterTrack.requester = { displayName: "📻 Autoplay Radio" };
     return studioMasterTrack;
 }
@@ -340,8 +361,19 @@ export function getMasterNodeConfigs() {
             enablePingOnStatsCheck: true,
         });
     }
-    // Priority 1: Millo-BackupNode (verified online, ultra-fast 750ms, 256k YouTube Music & Spotify HQ)
+    // Priority 1: Kasawa-MasterNode (verified online, supports direct HTTP 320k JioSaavn streaming, YT, Spotify, SoundCloud)
     configs.push({
+        authorization: "youshallnotpass",
+        host: "lava2.kasawa.pro",
+        port: 2334,
+        secure: false,
+        id: "Kasawa-MasterNode",
+        retryAmount: 1000,
+        retryDelay: 5000,
+        retryTimespan: 180000,
+        requestSignalTimeoutMS: 7000,
+        enablePingOnStatsCheck: true,
+    }, {
         authorization: "https://discord.gg/mjS5J2K3ep",
         host: "lava-v4.millohost.my.id",
         port: 443,
@@ -353,22 +385,11 @@ export function getMasterNodeConfigs() {
         requestSignalTimeoutMS: 7000,
         enablePingOnStatsCheck: true,
     }, {
-        authorization: "free",
-        host: "lavalink-v4.triniumhost.com",
+        authorization: "https://seretia.link/discord",
+        host: "lavalinkv4.serenetia.com",
         port: 443,
         secure: true,
-        id: "Trinium-FastNode",
-        retryAmount: 1000,
-        retryDelay: 5000,
-        retryTimespan: 180000,
-        requestSignalTimeoutMS: 7000,
-        enablePingOnStatsCheck: true,
-    }, {
-        authorization: "free",
-        host: "lavalink.triniumhost.com",
-        port: 4333,
-        secure: false,
-        id: "Trinium-Studio",
+        id: "Serenetia-AuxNode",
         retryAmount: 1000,
         retryDelay: 5000,
         retryTimespan: 180000,
@@ -517,6 +538,27 @@ export function initLavalink(client) {
                         }
                     }
                 }
+                // ── Frame Deficit Watchdog ───────────────────────────────────────────
+                // If the current node has high frame deficit (> 200), it means it's
+                // overloaded and audio is about to speed-up/glitch. Silently migrate
+                // to the best alternative node NOW before it becomes audible.
+                const nodeStats = player.node?.stats;
+                const currentDeficit = nodeStats?.frameStats?.deficit ?? 0;
+                const DEFICIT_MIGRATE_THRESHOLD = 200;
+                if (currentDeficit > DEFICIT_MIGRATE_THRESHOLD && !player.getData("deficit_migrating")) {
+                    const bestNodeId = getBestNode();
+                    if (bestNodeId && bestNodeId !== player.node?.id) {
+                        const bestNode = lavalink.nodeManager.nodes.get(bestNodeId);
+                        if (bestNode?.connected) {
+                            player.setData("deficit_migrating", true);
+                            console.warn(`[Frame Watchdog] Node "${player.node?.id}" has ${currentDeficit} deficit frames. Migrating to "${bestNodeId}" to prevent audio glitch...`);
+                            player.changeNode(bestNode, false)
+                                .catch(() => { })
+                                .finally(() => setTimeout(() => player.setData("deficit_migrating", false), 30000));
+                        }
+                    }
+                }
+                // ─────────────────────────────────────────────────────────────────────
                 await updateActivePlayerMessage(player);
             }
             catch (err) {
@@ -557,6 +599,25 @@ export function initLavalink(client) {
         }
         trackStartLocks.add(player.guildId);
         try {
+            // ── Silent node upgrade between tracks (non-blocking) ──────────────────
+            // Migrate to the best node in the background — doesn't delay song start.
+            // The NEXT track after this one will benefit if migration takes time.
+            (async () => {
+                try {
+                    const currentNodeId = player.node?.id;
+                    const bestNodeId = getBestNode();
+                    const currentIsHealthy = currentNodeId ? isNodeHealthy(currentNodeId) : false;
+                    if (bestNodeId && bestNodeId !== currentNodeId && (!currentIsHealthy || currentNodeId === "Millo-BackupNode")) {
+                        const bestNode = lavalink.nodeManager.nodes.get(bestNodeId);
+                        if (bestNode?.connected) {
+                            console.log(`[Node Upgrade] Silently moving player from "${currentNodeId}" → "${bestNodeId}" for best quality.`);
+                            await player.changeNode(bestNode, false).catch(() => { });
+                        }
+                    }
+                }
+                catch { /* non-fatal */ }
+            })();
+            // ────────────────────────────────────────────────────────────────────────
             const prevMessageId = activePlayerMessages.get(player.guildId) || player.getData("active_message_id");
             const activeTrackUri = player.getData("active_track_uri");
             // If the exact same track is already playing and has an active message, just update it in place
@@ -788,82 +849,157 @@ export function initLavalink(client) {
                 const cleanAuthor = (track.info.author || "").replace(/- Topic/gi, "").trim();
                 const fallbackQuery = `${cleanTitle} ${cleanAuthor}`.trim();
                 console.log(`[Universal Recovery] Stream restricted for "${rawTitle}" (ID: ${failedId}). Attempt #${recoveryAttempts} auto-recovering as "${fallbackQuery}"...`);
-                // Prioritize healthy alternate nodes (Jirayu proxy, Trinium) over the node that just failed
+                // Prioritize healthy alternate nodes over the node that just failed
                 const connectedNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected && !n.id.includes("Custom"));
                 const healthyOtherNodes = connectedNodes.filter((n) => isNodeHealthy(n.id) && n.id !== player.node.id);
-                const jirayuNode = healthyOtherNodes.find((n) => n.id === "Jirayu-AuxNode");
-                const triniumFast = healthyOtherNodes.find((n) => n.id === "Trinium-FastNode");
-                const triniumStudio = healthyOtherNodes.find((n) => n.id === "Trinium-Studio");
+                const kasawaNode = healthyOtherNodes.find((n) => n.id === "Kasawa-MasterNode");
                 const milloNode = healthyOtherNodes.find((n) => n.id === "Millo-BackupNode");
-                const otherHealthy = healthyOtherNodes.filter((n) => n.id !== "Millo-BackupNode" && n.id !== "Trinium-FastNode" && n.id !== "Trinium-Studio" && n.id !== "Jirayu-AuxNode");
+                const serenetiaNode = healthyOtherNodes.find((n) => n.id === "Serenetia-AuxNode");
+                const jirayuNode = healthyOtherNodes.find((n) => n.id === "Jirayu-AuxNode");
+                const otherHealthy = healthyOtherNodes.filter((n) => n.id !== "Kasawa-MasterNode" && n.id !== "Millo-BackupNode" && n.id !== "Serenetia-AuxNode" && n.id !== "Jirayu-AuxNode");
                 const degradedList = connectedNodes.filter((n) => !isNodeHealthy(n.id) && n.id !== player.node.id);
                 const nodesToTry = [
-                    ...(jirayuNode ? [jirayuNode] : []),
-                    ...(triniumFast ? [triniumFast] : []),
-                    ...(triniumStudio ? [triniumStudio] : []),
+                    ...(kasawaNode ? [kasawaNode] : []),
                     ...(milloNode ? [milloNode] : []),
+                    ...(serenetiaNode ? [serenetiaNode] : []),
+                    ...(jirayuNode ? [jirayuNode] : []),
                     ...otherHealthy,
                     ...degradedList,
                     player.node, // current failing node is only last resort
                 ];
                 let recoveredTrack = null;
                 let targetNode = player.node;
-                // On attempt #2+, immediately prioritize SoundCloud to bypass YouTube datacenter IP blocks completely
+                // ── TIER 0: JioSaavn 320 kbps Studio Audio Recovery (<500ms) ──
+                // Completely circumvents YouTube datacenter 403 / IP rate limits and streams bit-perfect 320 kbps AAC audio!
+                try {
+                    const jioMatch = await resolveJioSaavnTrack(cleanTitle, cleanAuthor);
+                    if (jioMatch) {
+                        const jioLoaded = await loadJioSaavnAsLavalinkTrack(jioMatch, track.requester, [
+                            player.node,
+                            ...(kasawaNode ? [kasawaNode] : []),
+                            ...nodesToTry,
+                        ]);
+                        if (jioLoaded) {
+                            recoveredTrack = jioLoaded.track;
+                            targetNode = jioLoaded.node;
+                            console.log(`[Universal Recovery] Recovered "${rawTitle}" via JioSaavn 320kbps Studio Master on node "${targetNode.id}"`);
+                        }
+                    }
+                }
+                catch (err) {
+                    console.warn("[Universal Recovery] JioSaavn recovery attempt error:", err);
+                }
+                // On attempt #2+, prioritize SoundCloud to bypass YouTube datacenter IP blocks completely
                 const trySoundCloudFirst = recoveryAttempts > 1;
-                for (const node of nodesToTry) {
-                    try {
-                        if (trySoundCloudFirst) {
-                            const scRes = await node.search({ query: fallbackQuery, source: "scsearch" }, track.requester);
-                            if (scRes?.tracks?.length && scRes.loadType !== "empty" && scRes.loadType !== "error") {
-                                const scCandidate = scRes.tracks.find((t) => t.info.identifier !== failedId &&
-                                    !restrictedTrackIds.has(t.info.identifier) &&
-                                    isRelevantTrack(t.info.title, cleanTitle));
-                                if (scCandidate) {
-                                    recoveredTrack = scCandidate;
-                                    targetNode = node;
-                                    console.log(`[Universal Recovery] Found verified SoundCloud alternative on node "${node.id}": "${scCandidate.info.title}"`);
-                                    break;
-                                }
-                            }
-                        }
-                        // Strategy 1: YouTube Music / YouTube Audio - Authentic studio track, excluding failed ID & checking title relevance
-                        let ytRes = await node.search({ query: `${cleanTitle} audio`, source: "ytmsearch" }, track.requester);
-                        if (!ytRes?.tracks?.length || ytRes.loadType === "empty" || ytRes.loadType === "error") {
-                            ytRes = await node.search({ query: `${cleanTitle} lyrical`, source: "ytsearch" }, track.requester);
-                        }
-                        if (ytRes?.tracks?.length) {
-                            const ytCandidate = ytRes.tracks.find((t) => t.info.identifier !== failedId &&
-                                !restrictedTrackIds.has(t.info.identifier) &&
-                                isRelevantTrack(t.info.title, cleanTitle));
-                            if (ytCandidate) {
-                                recoveredTrack = ytCandidate;
+                // ── FAST PATH: try the same track URL on a different healthy node (~500ms) ──
+                // This is the fastest recovery — no search needed, just re-resolve on a clean IP.
+                const fastNodes = [
+                    ...(kasawaNode ? [kasawaNode] : []),
+                    ...(milloNode ? [milloNode] : []),
+                    ...(serenetiaNode ? [serenetiaNode] : []),
+                    ...(jirayuNode ? [jirayuNode] : []),
+                ];
+                if (!recoveredTrack && track.info.uri && fastNodes.length > 0 && !trySoundCloudFirst) {
+                    for (const node of fastNodes) {
+                        try {
+                            const directRes = await Promise.race([
+                                node.search({ query: track.info.uri }, track.requester),
+                                new Promise((r) => setTimeout(() => r(null), 2000)),
+                            ]);
+                            const directTrack = directRes?.tracks?.find((t) => !restrictedTrackIds.has(t.info.identifier));
+                            if (directTrack) {
+                                recoveredTrack = directTrack;
                                 targetNode = node;
-                                console.log(`[Universal Recovery] Found authentic alternative YouTube audio on node "${node.id}": "${ytCandidate.info.title}"`);
+                                console.log(`[Universal Recovery] Fast-path: re-resolved same track on node "${node.id}" in <2s`);
                                 break;
                             }
                         }
-                        // Strategy 2: SoundCloud (scsearch) with STRICT title matching (never accept unrelated DJ sets)
-                        if (!trySoundCloudFirst) {
-                            const scRes = await node.search({ query: fallbackQuery, source: "scsearch" }, track.requester);
-                            if (scRes?.tracks?.length && scRes.loadType !== "empty" && scRes.loadType !== "error") {
-                                const scCandidate = scRes.tracks.find((t) => t.info.identifier !== failedId &&
+                        catch { /* try next */ }
+                    }
+                }
+                // ───────────────────────────────────────────────────────────────────────
+                // FULL SEARCH PATH: race all candidate nodes in parallel for ~1s resolution
+                if (!recoveredTrack) {
+                    // On attempt #2+, immediately prioritize SoundCloud to bypass YouTube datacenter IP blocks completely
+                    const searchSource = trySoundCloudFirst ? "scsearch" : "ytmsearch";
+                    const searchQuery = trySoundCloudFirst ? fallbackQuery : `${cleanTitle} audio`;
+                    // Race all nodes simultaneously — fastest response wins
+                    const raceResults = await Promise.allSettled(nodesToTry.slice(0, 3).map(async (node) => {
+                        const res = await Promise.race([
+                            node.search({ query: searchQuery, source: searchSource }, track.requester),
+                            new Promise((r) => setTimeout(() => r(null), 3000)),
+                        ]);
+                        const candidate = res?.tracks?.find((t) => t.info.identifier !== failedId &&
+                            !restrictedTrackIds.has(t.info.identifier) &&
+                            isRelevantTrack(t.info.title, cleanTitle));
+                        if (!candidate)
+                            throw new Error("no candidate");
+                        return { track: candidate, node };
+                    }));
+                    for (const result of raceResults) {
+                        if (result.status === "fulfilled") {
+                            recoveredTrack = result.value.track;
+                            targetNode = result.value.node;
+                            console.log(`[Universal Recovery] Found alternative on node "${targetNode.id}": "${recoveredTrack?.info.title}"`);
+                            break;
+                        }
+                    }
+                }
+                // SEQUENTIAL FALLBACK: slower but exhaustive — only runs if parallel race failed
+                if (!recoveredTrack) {
+                    for (const node of nodesToTry) {
+                        try {
+                            if (trySoundCloudFirst) {
+                                const scRes = await node.search({ query: fallbackQuery, source: "scsearch" }, track.requester);
+                                if (scRes?.tracks?.length && scRes.loadType !== "empty" && scRes.loadType !== "error") {
+                                    const scCandidate = scRes.tracks.find((t) => t.info.identifier !== failedId &&
+                                        !restrictedTrackIds.has(t.info.identifier) &&
+                                        isRelevantTrack(t.info.title, cleanTitle));
+                                    if (scCandidate) {
+                                        recoveredTrack = scCandidate;
+                                        targetNode = node;
+                                        console.log(`[Universal Recovery] Found verified SoundCloud alternative on node "${node.id}": "${scCandidate.info.title}"`);
+                                        break;
+                                    }
+                                }
+                            }
+                            let ytRes = await node.search({ query: `${cleanTitle} audio`, source: "ytmsearch" }, track.requester);
+                            if (!ytRes?.tracks?.length || ytRes.loadType === "empty" || ytRes.loadType === "error") {
+                                ytRes = await node.search({ query: `${cleanTitle} lyrical`, source: "ytsearch" }, track.requester);
+                            }
+                            if (ytRes?.tracks?.length) {
+                                const ytCandidate = ytRes.tracks.find((t) => t.info.identifier !== failedId &&
                                     !restrictedTrackIds.has(t.info.identifier) &&
                                     isRelevantTrack(t.info.title, cleanTitle));
-                                if (scCandidate) {
-                                    recoveredTrack = scCandidate;
+                                if (ytCandidate) {
+                                    recoveredTrack = ytCandidate;
                                     targetNode = node;
-                                    console.log(`[Universal Recovery] Found verified SoundCloud alternative on node "${node.id}": "${scCandidate.info.title}"`);
+                                    console.log(`[Universal Recovery] Found authentic alternative YouTube audio on node "${node.id}": "${ytCandidate.info.title}"`);
                                     break;
                                 }
                             }
+                            if (!trySoundCloudFirst) {
+                                const scRes = await node.search({ query: fallbackQuery, source: "scsearch" }, track.requester);
+                                if (scRes?.tracks?.length && scRes.loadType !== "empty" && scRes.loadType !== "error") {
+                                    const scCandidate = scRes.tracks.find((t) => t.info.identifier !== failedId &&
+                                        !restrictedTrackIds.has(t.info.identifier) &&
+                                        isRelevantTrack(t.info.title, cleanTitle));
+                                    if (scCandidate) {
+                                        recoveredTrack = scCandidate;
+                                        targetNode = node;
+                                        console.log(`[Universal Recovery] Found verified SoundCloud alternative on node "${node.id}": "${scCandidate.info.title}"`);
+                                        break;
+                                    }
+                                }
+                            }
                         }
-                    }
-                    catch (e) {
-                        const errMsg = e?.message || String(e);
-                        if (errMsg.includes("Unexpected token '<'") || errMsg.includes("<html>") || errMsg.includes("502")) {
-                            markNodeDegraded(node.id);
+                        catch (e) {
+                            const errMsg = e?.message || String(e);
+                            if (errMsg.includes("Unexpected token '<'") || errMsg.includes("<html>") || errMsg.includes("502")) {
+                                markNodeDegraded(node.id);
+                            }
+                            console.warn(`[Universal Recovery] Search failed on node ${node.id}:`, errMsg);
                         }
-                        console.warn(`[Universal Recovery] Search failed on node ${node.id}:`, errMsg);
                     }
                 }
                 if (recoveredTrack) {
@@ -875,10 +1011,21 @@ export function initLavalink(client) {
                         });
                     }
                     recoveredTrack.requester = track.requester;
+                    // Preserve original title/author so autoplay language detection stays correct.
+                    // Without this, "Munbe Vaa" recovered as a different YT URL seeds as GLOBAL
+                    // because the new video's metadata may not have clear Tamil signals.
+                    if (track.info.title)
+                        recoveredTrack.info.title = track.info.title;
+                    if (track.info.author)
+                        recoveredTrack.info.author = track.info.author;
+                    if (track.info.artworkUrl)
+                        recoveredTrack.info.artworkUrl = track.info.artworkUrl;
                     await player.play({ clientTrack: recoveredTrack, noReplace: false });
                     if (player.textChannelId) {
                         const channel = client.channels.cache.get(player.textChannelId);
-                        channel?.send(`🔄 **Auto-Recovered:** Restriction detected on video. Swapped to high-fidelity stream: **[${recoveredTrack.info.title}](${recoveredTrack.info.uri})**`).then((msg) => autoDeleteMessage(msg, 6000)).catch(() => { });
+                        const isJio = Boolean(recoveredTrack.userData?.isJioSaavn);
+                        const streamLabel = isJio ? "💎 **JioSaavn Studio Master (320 kbps AAC)**" : "high-fidelity stream";
+                        channel?.send(`🔄 **Auto-Recovered:** Restriction detected on video. Swapped to ${streamLabel}: **[${recoveredTrack.info.title}](${recoveredTrack.info.uri})**`).then((msg) => autoDeleteMessage(msg, 7000)).catch(() => { });
                     }
                     setTimeout(() => {
                         player.setData("recovering_track", false);
@@ -909,26 +1056,51 @@ export function getBestNode() {
         if (custom?.connected && isNodeHealthy("Primary-CustomNode"))
             return "Primary-CustomNode";
     }
-    // Priority 1: Jirayu-AuxNode (proxied YouTube audio, bypasses datacenter IP blocks)
-    const jirayu = lavalink.nodeManager.nodes.get("Jirayu-AuxNode");
-    if (jirayu?.connected && isNodeHealthy("Jirayu-AuxNode"))
-        return "Jirayu-AuxNode";
-    // Priority 2: Trinium nodes (fast & clean)
-    const trinium = lavalink.nodeManager.nodes.get("Trinium-FastNode");
-    if (trinium?.connected && isNodeHealthy("Trinium-FastNode"))
-        return "Trinium-FastNode";
-    const triniumStudio = lavalink.nodeManager.nodes.get("Trinium-Studio");
-    if (triniumStudio?.connected && isNodeHealthy("Trinium-Studio"))
-        return "Trinium-Studio";
-    // Priority 3: Millo-BackupNode
-    const millo = lavalink.nodeManager.nodes.get("Millo-BackupNode");
-    if (millo?.connected && isNodeHealthy("Millo-BackupNode"))
-        return "Millo-BackupNode";
-    const anyHealthy = Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected && isNodeHealthy(n.id) && !n.id.includes("Custom"));
-    if (anyHealthy)
-        return anyHealthy.id;
-    const fallback = Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected && !n.id.includes("Custom"));
-    return fallback?.id;
+    // Score every healthy connected node by real-time load metrics.
+    // Lower score = less load = better for new streams.
+    const candidates = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected && isNodeHealthy(n.id) && !n.id.includes("Custom"));
+    if (candidates.length === 0) {
+        // All healthy nodes gone — fall back to any connected node
+        const fallback = Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected && !n.id.includes("Custom"));
+        return fallback?.id;
+    }
+    // Node load score (lower = better):
+    //   - Frame deficit contributes heavily (each deficit frame = jitter/speed-up for listeners)
+    //   - Playing player count shows how loaded the node is
+    //   - CPU load adds secondary pressure signal
+    //   - Static priority bonus: Jirayu=0, Trinium=10, Millo=30 (tiebreaker)
+    const FRAME_DEFICIT_WEIGHT = 0.5; // per deficit frame
+    const PLAYER_COUNT_WEIGHT = 5; // per active playing stream
+    const CPU_WEIGHT = 200; // per 1.0 (100%) CPU load
+    const JITTER_THRESHOLD = 50; // deficit frames below this = negligible
+    const scored = candidates.map((node) => {
+        const stats = node.stats;
+        const deficit = Math.max(0, (stats?.frameStats?.deficit ?? 0) - JITTER_THRESHOLD);
+        const playing = stats?.playingPlayers ?? 0;
+        const cpu = stats?.cpu?.lavalinkLoad ?? 0;
+        // Priority bonus (lower = preferred when load is equal)
+        let priorityBonus = 20;
+        if (node.id === "Jirayu-AuxNode")
+            priorityBonus = 0;
+        if (node.id === "Trinium-FastNode")
+            priorityBonus = 8;
+        if (node.id === "Trinium-Studio")
+            priorityBonus = 10;
+        if (node.id === "Millo-BackupNode")
+            priorityBonus = 30;
+        const score = (deficit * FRAME_DEFICIT_WEIGHT) +
+            (playing * PLAYER_COUNT_WEIGHT) +
+            (cpu * CPU_WEIGHT) +
+            priorityBonus;
+        return { id: node.id, score, playing, deficit };
+    });
+    scored.sort((a, b) => a.score - b.score);
+    const winner = scored[0];
+    if (scored.length > 1 && winner.id !== "Jirayu-AuxNode") {
+        // Only log when a non-default node wins (i.e., load-aware selection kicked in)
+        console.log(`[Node Selector] Load-aware pick: "${winner.id}" (score ${winner.score.toFixed(0)}, ${winner.playing} streams, ${winner.deficit} deficit frames)`);
+    }
+    return winner?.id;
 }
 /**
  * Validates member voice state and gets or creates player

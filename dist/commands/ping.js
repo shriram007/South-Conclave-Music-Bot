@@ -33,7 +33,7 @@ export const pingCommand = {
         const bestNodeId = getBestNode();
         const activeNode = player?.node || (bestNodeId ? lavalink.nodeManager.nodes.get(bestNodeId) : null) || Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected);
         const currentTrack = player?.queue?.current;
-        const sourceInfo = currentTrack ? getSourceInfo(currentTrack.info.sourceName) : null;
+        const sourceInfo = currentTrack ? getSourceInfo(currentTrack.info.sourceName, currentTrack.info.uri) : null;
         const embed = new EmbedBuilder()
             .setColor(voicePing > 0 && voicePing < 100 ? 0x00d26a : 0x5865f2)
             .setTitle("📡 Live Audio Stream & Node Latency")

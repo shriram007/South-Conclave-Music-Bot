@@ -27,7 +27,7 @@ export function buildPlayerMessage(player: Player, track?: Track | null): Player
     return { embeds: [emptyEmbed], components: [] };
   }
 
-  const source = getSourceInfo(current.info.sourceName);
+  const source = getSourceInfo(current.info.sourceName, current.info.uri);
   const position = player.position || 0;
   const duration = current.info.duration || 0;
   const isPaused = player.paused;
