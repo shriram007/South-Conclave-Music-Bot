@@ -244,19 +244,52 @@ export function getTrackRelevanceScore(candidateTitle: string, targetTitle: stri
     return normCandidate.includes(normTarget) ? 0.85 : 0;
   }
 
-  let maxScore = 0;
-  for (const tToken of targetTokens) {
-    if (normCandidate.includes(tToken)) {
-      maxScore = Math.max(maxScore, 0.85);
-      continue;
-    }
+  // If target has only 1 meaningful token (e.g. "yaarumilla" or typo "yarumula")
+  if (targetTokens.length === 1) {
+    const tToken = targetTokens[0];
+    if (normCandidate.includes(tToken)) return 0.90;
+    let bestSim = 0;
     for (const cToken of candidateTokens) {
       const sim = calculateFuzzySimilarity(tToken, cToken);
-      if (sim > maxScore) maxScore = sim;
+      if (sim > bestSim) bestSim = sim;
+    }
+    return bestSim;
+  }
+
+  // Multi-token target: check if any hyphen-separated title segment is present (e.g. "Artist - Song Title")
+  const rawParts = targetTitle.split(/[-–—|:]/);
+  for (const part of rawParts) {
+    const normPart = normalize(part);
+    if (normPart.length >= 4 && normCandidate.includes(normPart)) {
+      return 0.92;
     }
   }
 
-  return maxScore;
+  // For multi-token queries, calculate matching token ratio with fuzzy support
+  let matchedTokens = 0;
+  let totalScore = 0;
+
+  for (const tToken of targetTokens) {
+    let tokenBest = 0;
+    if (normCandidate.includes(tToken)) {
+      tokenBest = 1.0;
+    } else {
+      for (const cToken of candidateTokens) {
+        const sim = calculateFuzzySimilarity(tToken, cToken);
+        if (sim > tokenBest) tokenBest = sim;
+      }
+    }
+
+    if (tokenBest >= 0.70) {
+      matchedTokens++;
+    }
+    totalScore += tokenBest;
+  }
+
+  const matchRatio = matchedTokens / targetTokens.length;
+  const avgScore = totalScore / targetTokens.length;
+
+  return matchRatio >= 0.5 ? Math.max(avgScore, matchRatio * 0.9) : avgScore * 0.5;
 }
 
 /**

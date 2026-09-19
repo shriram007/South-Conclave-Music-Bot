@@ -604,14 +604,34 @@ export function initLavalink(client: Client) {
     }
   });
 
+  const trackStartLocks = new Set<string>();
+
   lavalink.on("trackStart", async (player: Player, track: Track | null) => {
     if (!player.textChannelId || !track) return;
     const channel = (client.channels.cache.get(player.textChannelId) ||
       await client.channels.fetch(player.textChannelId).catch(() => null)) as TextChannel | null;
     if (!channel || !channel.isTextBased()) return;
 
+    // Concurrency lock per guild to prevent multiple cards being created simultaneously
+    if (trackStartLocks.has(player.guildId)) {
+      console.log(`[Player] trackStart execution already in-flight for guild ${player.guildId}. Merging.`);
+      return;
+    }
+    trackStartLocks.add(player.guildId);
+
     try {
       const prevMessageId = activePlayerMessages.get(player.guildId) || (player.getData("active_message_id") as string | undefined);
+      const activeTrackUri = player.getData("active_track_uri");
+
+      // If the exact same track is already playing and has an active message, just update it in place
+      if (prevMessageId && activeTrackUri && activeTrackUri === track.info.uri) {
+        console.log(`[Player] Track "${track.info.title}" re-started on same player. Updating existing card.`);
+        await updateActivePlayerMessage(player, true);
+        startLivePlayerTicker(player);
+        return;
+      }
+      player.setData("active_track_uri", track.info.uri);
+
       const playerMsgOptions = buildPlayerMessage(player, track);
 
       // Clean up previous Now Playing card so the new song gets a fresh announcement card at the bottom
@@ -623,6 +643,19 @@ export function initLavalink(client: Client) {
           }
         } catch {}
       }
+
+      // Sweeper: delete any orphaned bot messages with Now Playing embeds in recent chat to ensure only 1 card exists
+      try {
+        const recentMsgs = await channel.messages.fetch({ limit: 6 }).catch(() => null);
+        const botPlayerCards = recentMsgs?.filter(
+          (m) => m.author.id === client.user?.id && m.embeds.some((e) => e.description?.includes("Now playing"))
+        );
+        if (botPlayerCards && botPlayerCards.size > 0) {
+          for (const [, m] of botPlayerCards) {
+            await m.delete().catch(() => {});
+          }
+        }
+      } catch {}
 
       // Always send a fresh, prominent Now Playing card at the bottom of the chat for new songs
       const sentMsg = await channel.send(playerMsgOptions);
@@ -667,6 +700,8 @@ export function initLavalink(client: Client) {
       }, 2500);
     } catch (err) {
       console.error("[Lavalink] Failed to send trackStart message:", err);
+    } finally {
+      trackStartLocks.delete(player.guildId);
     }
   });
 
@@ -768,14 +803,28 @@ export function initLavalink(client: Client) {
     const errorMsg = payload?.exception?.message || JSON.stringify(payload);
     console.error(`[Lavalink] Error playing "${track?.info.title}":`, errorMsg);
 
-    if (errorMsg.includes("Unexpected token '<'") || errorMsg.includes("<html>") || errorMsg.includes("502")) {
-      markNodeDegraded(player.node.id);
+    const isNodeBlockedOrDegraded =
+      errorMsg.includes("Unexpected token '<'") ||
+      errorMsg.includes("<html>") ||
+      errorMsg.includes("502") ||
+      errorMsg.includes("503") ||
+      errorMsg.includes("403") ||
+      errorMsg.includes("All clients failed") ||
+      errorMsg.includes("requires sign-in") ||
+      errorMsg.includes("This network flagged") ||
+      errorMsg.includes("is no longer supported") ||
+      errorMsg.includes("Something broke when playing the track") ||
+      errorMsg.includes("Sign in to confirm your age");
+
+    if (isNodeBlockedOrDegraded) {
+      console.warn(`[Node Circuit Breaker] Node "${player.node?.id}" encountered stream restriction / error. Marking degraded for 10 minutes.`);
+      markNodeDegraded(player.node.id, 600000);
     }
 
     if (!track) return;
 
-    // Cache the failed track ID with FIFO limit (max 500 entries)
-    if (track.info.identifier) {
+    // Cache the failed track ID ONLY if it is a genuine video restriction (not just an IP block on the node)
+    if (!isNodeBlockedOrDegraded && track.info.identifier) {
       if (restrictedTrackIds.size >= 500) {
         const oldest = restrictedTrackIds.values().next().value;
         if (oldest) restrictedTrackIds.delete(oldest);
@@ -830,21 +879,24 @@ export function initLavalink(client: Client) {
 
         console.log(`[Universal Recovery] Stream restricted for "${rawTitle}" (ID: ${failedId}). Attempt #${recoveryAttempts} auto-recovering as "${fallbackQuery}"...`);
 
-        // Prioritize healthy nodes (Millo and Trinium)
+        // Prioritize healthy alternate nodes (Jirayu proxy, Trinium) over the node that just failed
         const connectedNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected && !n.id.includes("Custom"));
-        const healthyNodes = connectedNodes.filter((n) => isNodeHealthy(n.id));
-        const milloNode = healthyNodes.find((n) => n.id === "Millo-BackupNode");
-        const triniumFast = healthyNodes.find((n) => n.id === "Trinium-FastNode");
-        const triniumStudio = healthyNodes.find((n) => n.id === "Trinium-Studio");
-        const otherHealthy = healthyNodes.filter((n) => n.id !== "Millo-BackupNode" && n.id !== "Trinium-FastNode" && n.id !== "Trinium-Studio");
-        const degradedList = connectedNodes.filter((n) => !isNodeHealthy(n.id));
+        const healthyOtherNodes = connectedNodes.filter((n) => isNodeHealthy(n.id) && n.id !== player.node.id);
+        const jirayuNode = healthyOtherNodes.find((n) => n.id === "Jirayu-AuxNode");
+        const triniumFast = healthyOtherNodes.find((n) => n.id === "Trinium-FastNode");
+        const triniumStudio = healthyOtherNodes.find((n) => n.id === "Trinium-Studio");
+        const milloNode = healthyOtherNodes.find((n) => n.id === "Millo-BackupNode");
+        const otherHealthy = healthyOtherNodes.filter((n) => n.id !== "Millo-BackupNode" && n.id !== "Trinium-FastNode" && n.id !== "Trinium-Studio" && n.id !== "Jirayu-AuxNode");
+        const degradedList = connectedNodes.filter((n) => !isNodeHealthy(n.id) && n.id !== player.node.id);
 
         const nodesToTry = [
-          ...(milloNode ? [milloNode] : []),
+          ...(jirayuNode ? [jirayuNode] : []),
           ...(triniumFast ? [triniumFast] : []),
           ...(triniumStudio ? [triniumStudio] : []),
+          ...(milloNode ? [milloNode] : []),
           ...otherHealthy,
           ...degradedList,
+          player.node, // current failing node is only last resort
         ];
 
         let recoveredTrack: Track | null = null;
@@ -963,20 +1015,20 @@ export function getBestNode(): string | undefined {
     if (custom?.connected && isNodeHealthy("Primary-CustomNode")) return "Primary-CustomNode";
   }
 
-  // Priority 1: Millo-BackupNode (verified 200 OK YouTube & Spotify HQ)
-  const millo = lavalink.nodeManager.nodes.get("Millo-BackupNode");
-  if (millo?.connected && isNodeHealthy("Millo-BackupNode")) return "Millo-BackupNode";
+  // Priority 1: Jirayu-AuxNode (proxied YouTube audio, bypasses datacenter IP blocks)
+  const jirayu = lavalink.nodeManager.nodes.get("Jirayu-AuxNode");
+  if (jirayu?.connected && isNodeHealthy("Jirayu-AuxNode")) return "Jirayu-AuxNode";
 
-  // Priority 2: Trinium nodes
+  // Priority 2: Trinium nodes (fast & clean)
   const trinium = lavalink.nodeManager.nodes.get("Trinium-FastNode");
   if (trinium?.connected && isNodeHealthy("Trinium-FastNode")) return "Trinium-FastNode";
 
   const triniumStudio = lavalink.nodeManager.nodes.get("Trinium-Studio");
   if (triniumStudio?.connected && isNodeHealthy("Trinium-Studio")) return "Trinium-Studio";
 
-  // Priority 3: Jirayu
-  const jirayu = lavalink.nodeManager.nodes.get("Jirayu-AuxNode");
-  if (jirayu?.connected && isNodeHealthy("Jirayu-AuxNode")) return "Jirayu-AuxNode";
+  // Priority 3: Millo-BackupNode
+  const millo = lavalink.nodeManager.nodes.get("Millo-BackupNode");
+  if (millo?.connected && isNodeHealthy("Millo-BackupNode")) return "Millo-BackupNode";
 
   const anyHealthy = Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected && isNodeHealthy(n.id) && !n.id.includes("Custom"));
   if (anyHealthy) return anyHealthy.id;

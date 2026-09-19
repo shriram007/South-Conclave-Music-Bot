@@ -83,27 +83,46 @@ export async function smartSearch(
   user: any
 ) {
   if (isUrl) {
-    // Check if the URL was previously marked as restricted / login-required
-    for (const id of restrictedTrackIds) {
-      if (query.includes(id)) {
-        console.warn(`[SmartSearch] Detected previously restricted URL (${id}). Falling back to clean audio search...`);
-        return null;
-      }
+    // 1. Try resolving on current player node if healthy
+    if (player.node?.connected && isNodeHealthy(player.node.id)) {
+      try {
+        const directRes = await player.search({ query }, user);
+        if (directRes?.tracks?.length && directRes.loadType !== "empty" && directRes.loadType !== "error") {
+          return directRes;
+        }
+      } catch {}
     }
 
-    try {
-      const directRes = await player.search({ query }, user);
-      if (directRes?.tracks?.length && directRes.loadType !== "empty" && directRes.loadType !== "error") {
-        return directRes;
-      }
-    } catch {}
+    // 2. Try resolving across healthy proxy / alternate nodes (Jirayu proxy, Trinium, etc.)
+    const connectedNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n: any) => n.connected);
+    const healthyOthers = connectedNodes.filter((n: any) => n.id !== player.node?.id && isNodeHealthy(n.id));
+    // Prioritize Jirayu (proxy-enabled for YouTube) and Trinium
+    healthyOthers.sort((a: any, b: any) => {
+      if (a.id === "Jirayu-AuxNode") return -1;
+      if (b.id === "Jirayu-AuxNode") return 1;
+      if (a.id.includes("Trinium")) return -1;
+      if (b.id.includes("Trinium")) return 1;
+      return 0;
+    });
 
-    // Fallback URL search across alternate connected nodes
-    const otherNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n: any) => n.id !== player.node.id && n.connected);
-    for (const node of otherNodes) {
+    for (const node of healthyOthers) {
       try {
         const nodeRes = await node.search({ query }, user);
         if (nodeRes?.tracks?.length && nodeRes.loadType !== "empty" && nodeRes.loadType !== "error") {
+          console.log(`[SmartSearch] URL resolved on healthy node "${node.id}". Migrating player to stream...`);
+          await player.changeNode(node, false).catch(() => {});
+          return nodeRes;
+        }
+      } catch {}
+    }
+
+    // 3. Fallback: try any remaining connected node
+    const remaining = connectedNodes.filter((n: any) => n.id !== player.node?.id && !healthyOthers.includes(n));
+    for (const node of remaining) {
+      try {
+        const nodeRes = await node.search({ query }, user);
+        if (nodeRes?.tracks?.length && nodeRes.loadType !== "empty" && nodeRes.loadType !== "error") {
+          await player.changeNode(node, false).catch(() => {});
           return nodeRes;
         }
       } catch {}
@@ -115,19 +134,21 @@ export async function smartSearch(
     (n: any) => n.connected && !n.id.includes("Custom")
   );
   const healthyNodes = connectedNodes.filter((n: any) => isNodeHealthy(n.id));
-  const milloNode = healthyNodes.find((n: any) => n.id === "Millo-BackupNode");
+  const jirayuNode = healthyNodes.find((n: any) => n.id === "Jirayu-AuxNode");
   const triniumFast = healthyNodes.find((n: any) => n.id === "Trinium-FastNode");
   const triniumStudio = healthyNodes.find((n: any) => n.id === "Trinium-Studio");
-  const otherHealthy = healthyNodes.filter((n: any) => n.id !== "Millo-BackupNode" && n.id !== "Trinium-FastNode" && n.id !== "Trinium-Studio");
+  const milloNode = healthyNodes.find((n: any) => n.id === "Millo-BackupNode");
+  const otherHealthy = healthyNodes.filter((n: any) => n.id !== "Millo-BackupNode" && n.id !== "Trinium-FastNode" && n.id !== "Trinium-Studio" && n.id !== "Jirayu-AuxNode");
   const degradedList = connectedNodes.filter((n: any) => !isNodeHealthy(n.id));
 
-  // Try current player node if healthy, otherwise Millo -> Trinium -> others. Never query degraded nodes unless no healthy nodes exist.
+  // Prioritize Jirayu (proxy-enabled for YouTube) & Trinium, then Millo
   const playerNodeIfHealthy = (player.node?.connected && isNodeHealthy(player.node.id)) ? [player.node] : [];
   const nodesToTry = healthyNodes.length > 0 ? [
     ...playerNodeIfHealthy,
-    ...(milloNode && milloNode.id !== player.node?.id ? [milloNode] : []),
+    ...(jirayuNode && jirayuNode.id !== player.node?.id ? [jirayuNode] : []),
     ...(triniumFast && triniumFast.id !== player.node?.id ? [triniumFast] : []),
     ...(triniumStudio && triniumStudio.id !== player.node?.id ? [triniumStudio] : []),
+    ...(milloNode && milloNode.id !== player.node?.id ? [milloNode] : []),
     ...otherHealthy.filter((n: any) => n.id !== player.node?.id),
   ] : degradedList;
 
@@ -151,6 +172,11 @@ export async function smartSearch(
       errMsg.includes("Unexpected token '<'") ||
       errMsg.includes("<html>") ||
       errMsg.includes("502") ||
+      errMsg.includes("503") ||
+      errMsg.includes("403") ||
+      errMsg.includes("All clients failed") ||
+      errMsg.includes("requires sign-in") ||
+      errMsg.includes("This network flagged") ||
       errMsg.includes("ConnectTimeoutError") ||
       errMsg.includes("fetch failed") ||
       errMsg.includes("timeout")
@@ -166,11 +192,9 @@ export async function smartSearch(
   const updateCandidate = (res: any, node: any, viable: any[]) => {
     for (const t of viable) {
       const titleScore = getTrackRelevanceScore(t.info.title, query);
-      const authorScore = getTrackRelevanceScore(t.info.author, query);
-      const score = Math.max(titleScore, authorScore);
-      if (score > bestScore) {
-        bestScore = score;
-        bestCandidate = { res, node, tracks: [t, ...viable.filter((x) => x !== t)] };
+      if (titleScore > bestScore) {
+        bestScore = titleScore;
+        bestCandidate = { res, node, tracks: [t, ...viable.filter((x: any) => x !== t)] };
       }
     }
   };
@@ -183,7 +207,7 @@ export async function smartSearch(
         const viable = res.tracks.filter((t: any) => !restrictedTrackIds.has(t.info.identifier));
         if (viable.length > 0) {
           updateCandidate(res, node, viable);
-          const relevant = viable.filter((t: any) => isRelevantTrack(t.info.title, query) || isRelevantTrack(t.info.author, query));
+          const relevant = viable.filter((t: any) => isRelevantTrack(t.info.title, query));
           if (relevant.length > 0) {
             syncPlayerNode(node);
             console.log(`[SmartSearch] Found "${relevant[0].info.title}" via ytmsearch on node "${node.id}"`);
@@ -204,7 +228,7 @@ export async function smartSearch(
         const viable = res.tracks.filter((t: any) => !restrictedTrackIds.has(t.info.identifier));
         if (viable.length > 0) {
           updateCandidate(res, node, viable);
-          const relevant = viable.filter((t: any) => isRelevantTrack(t.info.title, query) || isRelevantTrack(t.info.author, query));
+          const relevant = viable.filter((t: any) => isRelevantTrack(t.info.title, query));
           if (relevant.length > 0) {
             syncPlayerNode(node);
             console.log(`[SmartSearch] Found "${relevant[0].info.title}" via ytsearch (audio) on node "${node.id}"`);
@@ -225,7 +249,7 @@ export async function smartSearch(
         const viable = res.tracks.filter((t: any) => !restrictedTrackIds.has(t.info.identifier));
         if (viable.length > 0) {
           updateCandidate(res, node, viable);
-          const relevant = viable.filter((t: any) => isRelevantTrack(t.info.title, query) || isRelevantTrack(t.info.author, query));
+          const relevant = viable.filter((t: any) => isRelevantTrack(t.info.title, query));
           if (relevant.length > 0) {
             syncPlayerNode(node);
             console.log(`[SmartSearch] Found "${relevant[0].info.title}" via scsearch on node "${node.id}"`);

@@ -98,31 +98,26 @@ export function buildQueueMessage(
     const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
         .setCustomId(`qm_remove_${safePage}_${safeSelected}`)
-        .setEmoji("🗑️")
-        .setLabel("Remove")
+        .setLabel("🗑️ Remove")
         .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
         .setCustomId(`qm_moveup_${safePage}_${safeSelected}`)
-        .setEmoji("🔼")
-        .setLabel("+1")
+        .setLabel("▲ Up (+1)")
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(absoluteSelectedIdx === 0),
       new ButtonBuilder()
         .setCustomId(`qm_top_${safePage}_${safeSelected}`)
-        .setEmoji("⏫")
-        .setLabel("Top")
+        .setLabel("⏫ Top")
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(absoluteSelectedIdx === 0),
       new ButtonBuilder()
         .setCustomId(`qm_movedown_${safePage}_${safeSelected}`)
-        .setEmoji("🔽")
-        .setLabel("-1")
+        .setLabel("▼ Down (-1)")
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(absoluteSelectedIdx === userTracks.length - 1),
       new ButtonBuilder()
         .setCustomId(`qm_play_${safePage}_${safeSelected}`)
-        .setEmoji("▶️")
-        .setLabel("Play")
+        .setLabel("▶ Play")
         .setStyle(ButtonStyle.Success)
     );
     components.push(row1);
@@ -152,18 +147,17 @@ export function buildQueueMessage(
   const rowNav = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(`qm_prev_${safePage}_${safeSelected}`)
-      .setEmoji("◀️")
+      .setLabel("◀ Prev")
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(safePage === 0),
     new ButtonBuilder()
       .setCustomId(`qm_next_${safePage}_${safeSelected}`)
-      .setEmoji("▶️")
+      .setLabel("Next ▶")
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(safePage >= totalPages - 1),
     new ButtonBuilder()
       .setCustomId("qm_close")
-      .setLabel("Close")
-      .setEmoji("❌")
+      .setLabel("✖ Close")
       .setStyle(ButtonStyle.Danger)
   );
   components.push(rowNav);
