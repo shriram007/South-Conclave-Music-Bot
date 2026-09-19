@@ -578,29 +578,6 @@ export function initLavalink(client: Client) {
           }
         }
 
-        // ── Frame Deficit Watchdog ───────────────────────────────────────────
-        // If the current node has high frame deficit (> 200), it means it's
-        // overloaded and audio is about to speed-up/glitch. Silently migrate
-        // to the best alternative node NOW before it becomes audible.
-        const nodeStats = (player.node as any)?.stats;
-        const currentDeficit = nodeStats?.frameStats?.deficit ?? 0;
-        const DEFICIT_MIGRATE_THRESHOLD = 200;
-
-        if (currentDeficit > DEFICIT_MIGRATE_THRESHOLD && !player.getData("deficit_migrating")) {
-          const bestNodeId = getBestNode();
-          if (bestNodeId && bestNodeId !== player.node?.id) {
-            const bestNode = lavalink.nodeManager.nodes.get(bestNodeId);
-            if (bestNode?.connected) {
-              player.setData("deficit_migrating", true);
-              console.warn(`[Frame Watchdog] Node "${player.node?.id}" has ${currentDeficit} deficit frames. Migrating to "${bestNodeId}" to prevent audio glitch...`);
-              player.changeNode(bestNode, false)
-                .catch(() => {})
-                .finally(() => setTimeout(() => player.setData("deficit_migrating", false), 30000));
-            }
-          }
-        }
-        // ─────────────────────────────────────────────────────────────────────
-
         await updateActivePlayerMessage(player);
 
       } catch (err) {
@@ -645,25 +622,6 @@ export function initLavalink(client: Client) {
     trackStartLocks.add(player.guildId);
 
     try {
-      // ── Silent node upgrade between tracks (non-blocking) ──────────────────
-      // Migrate to the best node in the background — doesn't delay song start.
-      // The NEXT track after this one will benefit if migration takes time.
-      (async () => {
-        try {
-          const currentNodeId = player.node?.id;
-          const bestNodeId = getBestNode();
-          const currentIsHealthy = currentNodeId ? isNodeHealthy(currentNodeId) : false;
-          if (bestNodeId && bestNodeId !== currentNodeId && (!currentIsHealthy || currentNodeId === "Millo-BackupNode")) {
-            const bestNode = lavalink.nodeManager.nodes.get(bestNodeId);
-            if (bestNode?.connected) {
-              console.log(`[Node Upgrade] Silently moving player from "${currentNodeId}" → "${bestNodeId}" for best quality.`);
-              await player.changeNode(bestNode, false).catch(() => {});
-            }
-          }
-        } catch { /* non-fatal */ }
-      })();
-      // ────────────────────────────────────────────────────────────────────────
-
       const prevMessageId = activePlayerMessages.get(player.guildId) || (player.getData("active_message_id") as string | undefined);
       const activeTrackUri = player.getData("active_track_uri");
 
@@ -1004,7 +962,7 @@ export function initLavalink(client: Client) {
             if (result.status === "fulfilled") {
               recoveredTrack = result.value.track;
               targetNode = result.value.node;
-              console.log(`[Universal Recovery] Found alternative on node "${targetNode.id}": "${recoveredTrack.info.title}"`);
+              console.log(`[Universal Recovery] Found alternative on node "${targetNode?.id}": "${recoveredTrack?.info?.title}"`);
               break;
             }
           }
@@ -1127,60 +1085,30 @@ export function getBestNode(): string | undefined {
     if (custom?.connected && isNodeHealthy("Primary-CustomNode")) return "Primary-CustomNode";
   }
 
-  // Score every healthy connected node by real-time load metrics.
-  // Lower score = less load = better for new streams.
-  const candidates = Array.from(lavalink.nodeManager.nodes.values()).filter(
+  // Priority 1: Jirayu-AuxNode (proxied YouTube audio, bypasses datacenter IP blocks & 403s)
+  const jirayu = lavalink.nodeManager.nodes.get("Jirayu-AuxNode");
+  if (jirayu?.connected && isNodeHealthy("Jirayu-AuxNode")) return "Jirayu-AuxNode";
+
+  // Priority 2: Trinium nodes (fast fallback)
+  const trinium = lavalink.nodeManager.nodes.get("Trinium-FastNode");
+  if (trinium?.connected && isNodeHealthy("Trinium-FastNode")) return "Trinium-FastNode";
+
+  const triniumStudio = lavalink.nodeManager.nodes.get("Trinium-Studio");
+  if (triniumStudio?.connected && isNodeHealthy("Trinium-Studio")) return "Trinium-Studio";
+
+  // Priority 3: Millo-BackupNode
+  const millo = lavalink.nodeManager.nodes.get("Millo-BackupNode");
+  if (millo?.connected && isNodeHealthy("Millo-BackupNode")) return "Millo-BackupNode";
+
+  const anyHealthy = Array.from(lavalink.nodeManager.nodes.values()).find(
     (n) => n.connected && isNodeHealthy(n.id) && !n.id.includes("Custom")
   );
+  if (anyHealthy) return anyHealthy.id;
 
-  if (candidates.length === 0) {
-    // All healthy nodes gone — fall back to any connected node
-    const fallback = Array.from(lavalink.nodeManager.nodes.values()).find(
-      (n) => n.connected && !n.id.includes("Custom")
-    );
-    return fallback?.id;
-  }
-
-  // Node load score (lower = better):
-  //   - Frame deficit contributes heavily (each deficit frame = jitter/speed-up for listeners)
-  //   - Playing player count shows how loaded the node is
-  //   - CPU load adds secondary pressure signal
-  //   - Static priority bonus: Jirayu=0, Trinium=10, Millo=30 (tiebreaker)
-  const FRAME_DEFICIT_WEIGHT = 0.5;   // per deficit frame
-  const PLAYER_COUNT_WEIGHT  = 5;     // per active playing stream
-  const CPU_WEIGHT           = 200;   // per 1.0 (100%) CPU load
-  const JITTER_THRESHOLD     = 50;    // deficit frames below this = negligible
-
-  const scored = candidates.map((node) => {
-    const stats = (node as any).stats;
-    const deficit      = Math.max(0, (stats?.frameStats?.deficit ?? 0) - JITTER_THRESHOLD);
-    const playing      = stats?.playingPlayers ?? 0;
-    const cpu          = stats?.cpu?.lavalinkLoad ?? 0;
-
-    // Priority bonus (lower = preferred when load is equal)
-    let priorityBonus = 20;
-    if (node.id === "Jirayu-AuxNode")    priorityBonus = 0;
-    if (node.id === "Trinium-FastNode")  priorityBonus = 8;
-    if (node.id === "Trinium-Studio")    priorityBonus = 10;
-    if (node.id === "Millo-BackupNode")  priorityBonus = 30;
-
-    const score = (deficit * FRAME_DEFICIT_WEIGHT) +
-                  (playing * PLAYER_COUNT_WEIGHT)  +
-                  (cpu     * CPU_WEIGHT)            +
-                  priorityBonus;
-
-    return { id: node.id, score, playing, deficit };
-  });
-
-  scored.sort((a, b) => a.score - b.score);
-
-  const winner = scored[0];
-  if (scored.length > 1 && winner.id !== "Jirayu-AuxNode") {
-    // Only log when a non-default node wins (i.e., load-aware selection kicked in)
-    console.log(`[Node Selector] Load-aware pick: "${winner.id}" (score ${winner.score.toFixed(0)}, ${winner.playing} streams, ${winner.deficit} deficit frames)`);
-  }
-
-  return winner?.id;
+  const fallback = Array.from(lavalink.nodeManager.nodes.values()).find(
+    (n) => n.connected && !n.id.includes("Custom")
+  );
+  return fallback?.id;
 }
 
 
