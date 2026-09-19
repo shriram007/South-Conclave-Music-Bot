@@ -1,4 +1,4 @@
-import { EmbedBuilder, } from "discord.js";
+import { ActionRowBuilder, EmbedBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, } from "discord.js";
 import { commandMap } from "../commands/index.js";
 import { fetchSongLyrics } from "../commands/lyrics.js";
 import { clearAllFilters, getBestNode, isNodeHealthy, lavalink, markNodeDegraded, smoothFadePause, smoothFadeResume, updateActivePlayerMessage, validateVoiceGate, } from "../lavalink/client.js";
@@ -36,6 +36,11 @@ export async function handleInteraction(interaction) {
     // 4. Handle Select Menu (Dropdowns)
     if (interaction.isStringSelectMenu()) {
         await handleSelectMenuInteraction(interaction);
+        return;
+    }
+    // 5. Handle Modal Submissions
+    if (interaction.isModalSubmit()) {
+        await handleModalSubmitInteraction(interaction);
         return;
     }
 }
@@ -84,6 +89,9 @@ async function handleButtonInteraction(interaction) {
     if (interaction.customId === "player_queue" || interaction.customId === "player_lyrics") {
         await interaction.deferReply({ ephemeral: true }).catch(() => { });
     }
+    else if (interaction.customId === "player_seek") {
+        // showModal requires an un-deferred raw interaction
+    }
     else {
         await interaction.deferUpdate().catch(() => { });
     }
@@ -109,6 +117,27 @@ async function handleButtonInteraction(interaction) {
                 console.log(`[Button: Pause/Resume] AFTER: paused=${player.paused} | Song: "${player.queue.current?.info.title}"`);
                 await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
                 break;
+            }
+            case "player_seek": {
+                if (!player.queue.current) {
+                    return interaction.reply({ content: "⚠️ No track currently playing.", ephemeral: true }).catch(() => { });
+                }
+                const currentPos = player.position || 0;
+                const duration = player.queue.current.info.duration || 0;
+                const modal = new ModalBuilder()
+                    .setCustomId("modal_player_seek")
+                    .setTitle("⏩ Jump to Track Timestamp");
+                const input = new TextInputBuilder()
+                    .setCustomId("seek_target")
+                    .setLabel(`Position (${formatDuration(currentPos)} / ${formatDuration(duration)})`)
+                    .setPlaceholder("e.g. 1:30, 90, +30, or -15")
+                    .setStyle(TextInputStyle.Short)
+                    .setRequired(true)
+                    .setMaxLength(12);
+                const modalRow = new ActionRowBuilder().addComponents(input);
+                modal.addComponents(modalRow);
+                await interaction.showModal(modal);
+                return;
             }
             case "player_rewind_10": {
                 if (!player.queue.current) {
@@ -259,8 +288,14 @@ async function handleButtonInteraction(interaction) {
                 break;
             }
             case "player_volup": {
-                const newVol = Math.min(200, player.volume + 10);
+                const newVol = Math.min(100, player.volume + 10);
                 await player.setVolume(newVol);
+                if (newVol === 100) {
+                    const activePreset = player.getData("filter_preset_key");
+                    if (!activePreset || activePreset === "reset") {
+                        await clearAllFilters(player);
+                    }
+                }
                 await interaction.editReply(buildPlayerMessage(player)).catch(() => updateActivePlayerMessage(player, true));
                 break;
             }
@@ -527,5 +562,76 @@ async function handleSelectMenuInteraction(interaction) {
         }
         console.error("[SelectMenu Interaction Error]:", err);
         await interaction.followUp({ content: "⚠️ Filter could not be applied. Please try again.", ephemeral: true }).catch(() => { });
+    }
+}
+async function handleModalSubmitInteraction(interaction) {
+    if (interaction.customId === "modal_player_seek") {
+        const player = lavalink.getPlayer(interaction.guildId);
+        if (!player || !player.queue.current) {
+            return interaction.reply({ content: "❌ Nothing is currently playing.", ephemeral: true }).catch(() => { });
+        }
+        const gate = await validateVoiceGate(interaction, player);
+        if (!gate.allowed) {
+            return interaction.reply({ content: gate.error, ephemeral: true }).catch(() => { });
+        }
+        await interaction.deferReply({ ephemeral: true }).catch(() => { });
+        const inputRaw = interaction.fields.getTextInputValue("seek_target").trim();
+        const duration = player.queue.current.info.duration || 0;
+        const currentPos = player.position || 0;
+        let targetMs = 0;
+        // Relative seek (+30, -15, +1:30)
+        if (inputRaw.startsWith("+") || inputRaw.startsWith("-")) {
+            const isPositive = inputRaw.startsWith("+");
+            const subStr = inputRaw.substring(1).replace(/s$/i, "").trim();
+            let deltaMs = 0;
+            if (subStr.includes(":")) {
+                const parts = subStr.split(":").map(Number);
+                if (parts.length === 2)
+                    deltaMs = (parts[0] * 60 + parts[1]) * 1000;
+                else if (parts.length === 3)
+                    deltaMs = (parts[0] * 3600 + parts[1] * 60 + parts[2]) * 1000;
+            }
+            else {
+                deltaMs = parseFloat(subStr) * 1000;
+            }
+            if (isNaN(deltaMs)) {
+                return interaction.editReply({ content: "❌ Invalid relative seek format! Use e.g. `+30`, `-15`, `+1:30`." });
+            }
+            targetMs = isPositive ? currentPos + deltaMs : currentPos - deltaMs;
+        }
+        else {
+            // Absolute seek (1:30, 02:45, or 90)
+            const cleanStr = inputRaw.replace(/s$/i, "").trim();
+            if (cleanStr.includes(":")) {
+                const parts = cleanStr.split(":").map(Number);
+                if (parts.some(isNaN)) {
+                    return interaction.editReply({ content: "❌ Invalid time format! Use `MM:SS` (e.g. `1:30`) or `HH:MM:SS`." });
+                }
+                if (parts.length === 2)
+                    targetMs = (parts[0] * 60 + parts[1]) * 1000;
+                else if (parts.length === 3)
+                    targetMs = (parts[0] * 3600 + parts[1] * 60 + parts[2]) * 1000;
+            }
+            else {
+                const sec = parseFloat(cleanStr);
+                if (isNaN(sec)) {
+                    return interaction.editReply({ content: "❌ Invalid timestamp! Use `MM:SS` (e.g. `1:30`) or seconds (e.g. `90`)." });
+                }
+                targetMs = sec * 1000;
+            }
+        }
+        targetMs = Math.max(0, Math.min(targetMs, duration));
+        await player.seek(targetMs);
+        await updateActivePlayerMessage(player, true);
+        await interaction.editReply({
+            content: `⏩ Jumped to **${formatDuration(targetMs)}** (\`${formatDuration(targetMs)} / ${formatDuration(duration)}\`)`,
+        });
+        if (interaction.channel && "send" in interaction.channel) {
+            const notice = await interaction.channel.send({
+                content: `⏩ **${interaction.user.username}** jumped to \`${formatDuration(targetMs)}\``,
+            }).catch(() => null);
+            if (notice)
+                autoDeleteMessage(notice, 5000);
+        }
     }
 }

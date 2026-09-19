@@ -53,7 +53,7 @@ export function buildPlayerMessage(player, track) {
     if (current.info.artworkUrl) {
         embed.setThumbnail(current.info.artworkUrl);
     }
-    // Row 1: Primary Controls (Pause/Resume, Skip, Stop, Like) - Matching FlaviBot
+    // Row 1: Primary Controls (Pause/Resume, Skip, Seek, Stop, Like)
     const row1 = new ActionRowBuilder().addComponents(new ButtonBuilder()
         .setCustomId("player_pause_resume")
         .setEmoji(isPaused ? "▶️" : "⏸️")
@@ -62,6 +62,10 @@ export function buildPlayerMessage(player, track) {
         .setCustomId("player_skip")
         .setEmoji("⏭️")
         .setLabel("Skip")
+        .setStyle(ButtonStyle.Secondary), new ButtonBuilder()
+        .setCustomId("player_seek")
+        .setEmoji("⏩")
+        .setLabel("Seek")
         .setStyle(ButtonStyle.Secondary), new ButtonBuilder()
         .setCustomId("player_stop")
         .setEmoji("⏹️")

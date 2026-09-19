@@ -510,12 +510,36 @@ export function initLavalink(client) {
             if (player.queue.tracks.length > 0)
                 return;
             if (foundTrack) {
-                foundTrack.requester = { displayName: "📻 Autoplay Radio" };
-                await player.queue.add(foundTrack);
+                let trackToPlay = foundTrack;
+                // Guarantee official 256kbps YouTube Music Studio Master fidelity (same purity as /play)
+                const milloOrBest = milloNode || (getBestNode() ? lavalink.nodeManager.nodes.get(getBestNode()) : null) || nodesToTry[0];
+                if (milloOrBest) {
+                    try {
+                        const hqQuery = `${(trackToPlay.info.title || "").replace(/\|.*/, "").replace(/\[.*?\]/g, "").replace(/\(.*?\)/g, "").trim()} ${(trackToPlay.info.author || "").replace(/- Topic/gi, "").trim()}`.trim();
+                        const hqRes = await milloOrBest.search({
+                            query: hqQuery,
+                            source: "ytmsearch",
+                        }, lastTrack.requester).catch(() => null);
+                        if (hqRes?.tracks?.length && !restrictedTrackIds.has(hqRes.tracks[0].info.identifier)) {
+                            console.log(`[Smart Autoplay] Upgraded "${trackToPlay.info.title}" to official 256kbps YouTube Music master: "${hqRes.tracks[0].info.title}"`);
+                            trackToPlay = hqRes.tracks[0];
+                        }
+                    }
+                    catch (e) {
+                        console.warn("[Smart Autoplay] Studio master upgrade notice:", e);
+                    }
+                }
+                // Migrate player to healthy primary node (Millo) so audio stream never throttles
+                if (milloOrBest && player.node && player.node.id !== milloOrBest.id && (!player.node.connected || !isNodeHealthy(player.node.id) || player.node.id !== "Millo-BackupNode")) {
+                    console.log(`[Smart Autoplay] Ensuring player is operating on HQ node "${milloOrBest.id}"...`);
+                    await player.changeNode(milloOrBest, false).catch(() => { });
+                }
+                trackToPlay.requester = { displayName: "📻 Autoplay Radio" };
+                await player.queue.add(trackToPlay);
                 await player.play();
                 if (channel) {
                     channel.send({
-                        content: `📻 **Autoplay Radio:** Playing **[${foundTrack.info.title}](${foundTrack.info.uri})** by **${foundTrack.info.author}**`,
+                        content: `📻 **Autoplay Radio:** Playing **[${trackToPlay.info.title}](${trackToPlay.info.uri})** by **${trackToPlay.info.author}**`,
                     }).then((msg) => autoDeleteMessage(msg, 7000)).catch(() => { });
                 }
                 return;

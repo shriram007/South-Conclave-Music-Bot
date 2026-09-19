@@ -8,13 +8,13 @@ import { autoDeleteReply } from "../utils/cleanup.js";
 export const volumeCommand = {
   data: new SlashCommandBuilder()
     .setName("volume")
-    .setDescription("Adjust the playback volume (0% - 125%)")
+    .setDescription("Adjust the playback volume (0% - 100%)")
     .addIntegerOption((opt) =>
       opt
         .setName("level")
-        .setDescription("Volume percentage (0 to 125. Recommended: 100 for studio quality)")
+        .setDescription("Volume level (0 to 100%. Recommended: 70-90% for normal listening, 100% studio max)")
         .setMinValue(0)
-        .setMaxValue(125)
+        .setMaxValue(100)
         .setRequired(true)
     ),
 
@@ -46,8 +46,8 @@ export const volumeCommand = {
     else if (vol < 50) icon = "🔉";
 
     let notice = "";
-    if (vol > 100) {
-      notice = "\n⚠️ *Note: Volumes above 100% can cause audio clipping on loud masters. 100% is the optimal studio standard.*";
+    if (vol > 90 && vol <= 100) {
+      notice = " *(Studio unity standard. For casual listening, 70%–90% is optimal)*";
     }
 
     await interaction.reply(`${icon} Volume adjusted to **${vol}%**${notice}`);
