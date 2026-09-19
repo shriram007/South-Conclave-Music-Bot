@@ -1,5 +1,5 @@
 import { EmbedBuilder, SlashCommandBuilder, } from "discord.js";
-import { lavalink } from "../lavalink/client.js";
+import { getBestNode, lavalink } from "../lavalink/client.js";
 import { autoDeleteReply } from "../utils/cleanup.js";
 import { formatDuration, getSourceInfo } from "../utils/formatters.js";
 function getPingBadge(ms) {
@@ -17,13 +17,21 @@ export const pingCommand = {
         .setDescription("Inspect live audio node ping, stream latency, and playback health"),
     async execute(interaction) {
         const startTime = Date.now();
-        await interaction.deferReply();
+        try {
+            await interaction.deferReply();
+        }
+        catch (err) {
+            if (err?.code === 10062 || err?.rawError?.code === 10062)
+                return;
+            throw err;
+        }
         const roundTrip = Date.now() - startTime;
         const player = lavalink.getPlayer(interaction.guildId);
         const clientPing = interaction.client.ws.ping;
         const voicePing = player?.ping?.ws ?? -1;
         const lavalinkPing = player?.ping?.lavalink ?? -1;
-        const activeNode = player?.node || lavalink.nodeManager.nodes.get("Serenetia-HighSpeed") || Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected);
+        const bestNodeId = getBestNode();
+        const activeNode = player?.node || (bestNodeId ? lavalink.nodeManager.nodes.get(bestNodeId) : null) || Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected);
         const currentTrack = player?.queue?.current;
         const sourceInfo = currentTrack ? getSourceInfo(currentTrack.info.sourceName) : null;
         const embed = new EmbedBuilder()

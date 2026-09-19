@@ -1,7 +1,7 @@
 import { EmbedBuilder, } from "discord.js";
 import { commandMap } from "../commands/index.js";
 import { fetchSongLyrics } from "../commands/lyrics.js";
-import { clearAllFilters, lavalink, smoothFadePause, smoothFadeResume, updateActivePlayerMessage, validateVoiceGate, } from "../lavalink/client.js";
+import { clearAllFilters, getBestNode, isNodeHealthy, lavalink, markNodeDegraded, smoothFadePause, smoothFadeResume, updateActivePlayerMessage, validateVoiceGate, } from "../lavalink/client.js";
 import { buildPlayerMessage } from "../lavalink/playerUI.js";
 import { autoDeleteMessage } from "../utils/cleanup.js";
 import { EQ_PRESETS } from "../utils/equalizer.js";
@@ -50,6 +50,10 @@ async function handleSlashCommand(interaction) {
         await cmd.execute(interaction);
     }
     catch (error) {
+        if (error?.code === 10062 || error?.rawError?.code === 10062) {
+            console.warn(`[Command Warn] /${interaction.commandName}: Interaction expired before reply (code 10062).`);
+            return;
+        }
         console.error(`[Command Error] /${interaction.commandName}:`, error);
         const errMessage = "⚠️ An error occurred while executing this command!";
         if (interaction.replied || interaction.deferred) {
@@ -84,11 +88,12 @@ async function handleButtonInteraction(interaction) {
         await interaction.deferUpdate().catch(() => { });
     }
     try {
-        // If the player's node is currently disconnected, seamlessly failover to a healthy connected node
-        if (!player.node || !player.node.connected) {
-            const healthyNode = Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected);
-            if (healthyNode) {
-                console.log(`[Failover] Player's current node is disconnected. Migrating player to "${healthyNode.id}"...`);
+        // Proactive Failover: If the player's node is disconnected or degraded, migrate to best healthy node before sending command
+        if (!player.node || !player.node.connected || !isNodeHealthy(player.node.id)) {
+            const bestId = getBestNode();
+            const healthyNode = (bestId ? lavalink.nodeManager.nodes.get(bestId) : null) || Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected && isNodeHealthy(n.id));
+            if (healthyNode && healthyNode.id !== player.node?.id) {
+                console.log(`[Failover] Player's current node (${player.node?.id || "none"}) is disconnected or degraded. Migrating to "${healthyNode.id}"...`);
                 await player.changeNode(healthyNode, false).catch(() => { });
             }
         }
@@ -386,17 +391,28 @@ async function handleButtonInteraction(interaction) {
             updateActivePlayerMessage(player, true).catch(() => { });
             return;
         }
-        console.error("[Button Interaction Error]:", err);
-        // If node was reconnecting or session dropped, gracefully failover
-        if (err.message?.includes("Node Request") || err.message?.includes("not connected") || err.message?.includes("Socket")) {
-            const healthyNode = Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected && n.id !== player.node.id);
-            if (healthyNode) {
+        console.error("[Button Interaction Error]:", err?.message || err);
+        // If node was reconnecting, timed out, or session dropped, gracefully failover and mark degraded
+        if (err.message?.includes("Node Request") ||
+            err.message?.includes("not connected") ||
+            err.message?.includes("Socket") ||
+            err.message?.includes("fetch failed") ||
+            err.name === "ConnectTimeoutError" ||
+            err.cause?.code === "UND_ERR_CONNECT_TIMEOUT") {
+            if (player?.node)
+                markNodeDegraded(player.node.id);
+            const bestId = getBestNode();
+            const healthyNode = (bestId ? lavalink.nodeManager.nodes.get(bestId) : null) || Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected && isNodeHealthy(n.id));
+            if (healthyNode && healthyNode.id !== player.node?.id) {
+                console.log(`[Failover] Migrating player after button error from ${player.node?.id || "none"} to "${healthyNode.id}"...`);
                 await player.changeNode(healthyNode, false).catch(() => { });
             }
-            await interaction.followUp({
-                content: "🔄 Audio connection refreshed. Please press the button again!",
-                ephemeral: true,
-            }).catch(() => { });
+            if (interaction.replied || interaction.deferred) {
+                await interaction.followUp({
+                    content: "🔄 Audio connection refreshed. Please press the button again!",
+                    ephemeral: true,
+                }).catch(() => { });
+            }
             return;
         }
         await interaction.followUp({ content: "⚠️ Action could not be completed. Please try again.", ephemeral: true }).catch(() => { });
@@ -414,9 +430,10 @@ async function handleSelectMenuInteraction(interaction) {
     // Acknowledge Discord immediately
     await interaction.deferUpdate().catch(() => { });
     try {
-        if (!player.node || !player.node.connected) {
-            const healthyNode = Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected);
-            if (healthyNode) {
+        if (!player.node || !player.node.connected || !isNodeHealthy(player.node.id)) {
+            const bestId = getBestNode();
+            const healthyNode = (bestId ? lavalink.nodeManager.nodes.get(bestId) : null) || Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected && isNodeHealthy(n.id));
+            if (healthyNode && healthyNode.id !== player.node?.id) {
                 await player.changeNode(healthyNode, false).catch(() => { });
             }
         }

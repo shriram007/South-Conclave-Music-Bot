@@ -9,7 +9,10 @@ import { commandMap } from "../commands/index.js";
 import { fetchSongLyrics } from "../commands/lyrics.js";
 import {
   clearAllFilters,
+  getBestNode,
+  isNodeHealthy,
   lavalink,
+  markNodeDegraded,
   smoothFadePause,
   smoothFadeResume,
   updateActivePlayerMessage,
@@ -66,6 +69,10 @@ async function handleSlashCommand(interaction: ChatInputCommandInteraction) {
   try {
     await cmd.execute(interaction);
   } catch (error: any) {
+    if (error?.code === 10062 || error?.rawError?.code === 10062) {
+      console.warn(`[Command Warn] /${interaction.commandName}: Interaction expired before reply (code 10062).`);
+      return;
+    }
     console.error(`[Command Error] /${interaction.commandName}:`, error);
     const errMessage = "⚠️ An error occurred while executing this command!";
     if (interaction.replied || interaction.deferred) {
@@ -102,11 +109,12 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
   }
 
   try {
-    // If the player's node is currently disconnected, seamlessly failover to a healthy connected node
-    if (!player.node || !player.node.connected) {
-      const healthyNode = Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected);
-      if (healthyNode) {
-        console.log(`[Failover] Player's current node is disconnected. Migrating player to "${healthyNode.id}"...`);
+    // Proactive Failover: If the player's node is disconnected or degraded, migrate to best healthy node before sending command
+    if (!player.node || !player.node.connected || !isNodeHealthy(player.node.id)) {
+      const bestId = getBestNode();
+      const healthyNode = (bestId ? lavalink.nodeManager.nodes.get(bestId) : null) || Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected && isNodeHealthy(n.id));
+      if (healthyNode && healthyNode.id !== player.node?.id) {
+        console.log(`[Failover] Player's current node (${player.node?.id || "none"}) is disconnected or degraded. Migrating to "${healthyNode.id}"...`);
         await player.changeNode(healthyNode, false).catch(() => { });
       }
     }
@@ -431,18 +439,30 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
       return;
     }
 
-    console.error("[Button Interaction Error]:", err);
+    console.error("[Button Interaction Error]:", err?.message || err);
 
-    // If node was reconnecting or session dropped, gracefully failover
-    if (err.message?.includes("Node Request") || err.message?.includes("not connected") || err.message?.includes("Socket")) {
-      const healthyNode = Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected && n.id !== player.node.id);
-      if (healthyNode) {
+    // If node was reconnecting, timed out, or session dropped, gracefully failover and mark degraded
+    if (
+      err.message?.includes("Node Request") ||
+      err.message?.includes("not connected") ||
+      err.message?.includes("Socket") ||
+      err.message?.includes("fetch failed") ||
+      err.name === "ConnectTimeoutError" ||
+      err.cause?.code === "UND_ERR_CONNECT_TIMEOUT"
+    ) {
+      if (player?.node) markNodeDegraded(player.node.id);
+      const bestId = getBestNode();
+      const healthyNode = (bestId ? lavalink.nodeManager.nodes.get(bestId) : null) || Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected && isNodeHealthy(n.id));
+      if (healthyNode && healthyNode.id !== player.node?.id) {
+        console.log(`[Failover] Migrating player after button error from ${player.node?.id || "none"} to "${healthyNode.id}"...`);
         await player.changeNode(healthyNode, false).catch(() => { });
       }
-      await interaction.followUp({
-        content: "🔄 Audio connection refreshed. Please press the button again!",
-        ephemeral: true,
-      }).catch(() => { });
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp({
+          content: "🔄 Audio connection refreshed. Please press the button again!",
+          ephemeral: true,
+        }).catch(() => { });
+      }
       return;
     }
 
@@ -465,9 +485,10 @@ async function handleSelectMenuInteraction(interaction: StringSelectMenuInteract
   await interaction.deferUpdate().catch(() => { });
 
   try {
-    if (!player.node || !player.node.connected) {
-      const healthyNode = Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected);
-      if (healthyNode) {
+    if (!player.node || !player.node.connected || !isNodeHealthy(player.node.id)) {
+      const bestId = getBestNode();
+      const healthyNode = (bestId ? lavalink.nodeManager.nodes.get(bestId) : null) || Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected && isNodeHealthy(n.id));
+      if (healthyNode && healthyNode.id !== player.node?.id) {
         await player.changeNode(healthyNode, false).catch(() => { });
       }
     }

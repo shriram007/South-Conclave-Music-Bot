@@ -104,11 +104,11 @@ export function getMasterNodeConfigs() {
             retryAmount: 1000,
             retryDelay: 5000,
             retryTimespan: 180000,
-            requestSignalTimeoutMS: 15000,
+            requestSignalTimeoutMS: 7000,
             enablePingOnStatsCheck: true,
         });
     }
-    // Priority 1: Millo-BackupNode (verified online, ultra-fast 753ms, 256k YouTube Music & Spotify HQ)
+    // Priority 1: Millo-BackupNode (verified online, ultra-fast 750ms, 256k YouTube Music & Spotify HQ)
     configs.push({
         authorization: "https://discord.gg/mjS5J2K3ep",
         host: "lava-v4.millohost.my.id",
@@ -118,7 +118,7 @@ export function getMasterNodeConfigs() {
         retryAmount: 1000,
         retryDelay: 5000,
         retryTimespan: 180000,
-        requestSignalTimeoutMS: 15000,
+        requestSignalTimeoutMS: 7000,
         enablePingOnStatsCheck: true,
     }, {
         authorization: "free",
@@ -129,7 +129,7 @@ export function getMasterNodeConfigs() {
         retryAmount: 1000,
         retryDelay: 5000,
         retryTimespan: 180000,
-        requestSignalTimeoutMS: 15000,
+        requestSignalTimeoutMS: 7000,
         enablePingOnStatsCheck: true,
     }, {
         authorization: "free",
@@ -140,7 +140,7 @@ export function getMasterNodeConfigs() {
         retryAmount: 1000,
         retryDelay: 5000,
         retryTimespan: 180000,
-        requestSignalTimeoutMS: 15000,
+        requestSignalTimeoutMS: 7000,
         enablePingOnStatsCheck: true,
     }, {
         authorization: "youshallnotpass",
@@ -151,18 +151,7 @@ export function getMasterNodeConfigs() {
         retryAmount: 1000,
         retryDelay: 5000,
         retryTimespan: 180000,
-        requestSignalTimeoutMS: 15000,
-        enablePingOnStatsCheck: true,
-    }, {
-        authorization: "https://seretia.link/discord",
-        host: "lavalinkv4.serenetia.com",
-        port: 443,
-        secure: true,
-        id: "Serenetia-HighSpeed",
-        retryAmount: 1000,
-        retryDelay: 5000,
-        retryTimespan: 180000,
-        requestSignalTimeoutMS: 15000,
+        requestSignalTimeoutMS: 7000,
         enablePingOnStatsCheck: true,
     });
     return configs;
@@ -396,13 +385,12 @@ export function initLavalink(client) {
             const triniumStudio = healthyNodes.find((n) => n.id === "Trinium-Studio");
             const otherHealthy = healthyNodes.filter((n) => n.id !== "Millo-BackupNode" && n.id !== "Trinium-FastNode" && n.id !== "Trinium-Studio");
             const degradedList = connectedNodes.filter((n) => !isNodeHealthy(n.id));
-            const nodesToTry = [
+            const nodesToTry = healthyNodes.length > 0 ? [
                 ...(milloNode ? [milloNode] : []),
                 ...(triniumFast ? [triniumFast] : []),
                 ...(triniumStudio ? [triniumStudio] : []),
                 ...otherHealthy,
-                ...degradedList,
-            ];
+            ] : degradedList;
             const historyIds = new Set(player.queue.previous.map((t) => t.info.identifier));
             let foundTrack = null;
             // Strategy 1: YouTube Music Native Algorithmic Radio Mix (25 AI-curated related tracks)
@@ -410,7 +398,9 @@ export function initLavalink(client) {
                 const radioUrl = `https://www.youtube.com/watch?v=${videoId}&list=RD${videoId}`;
                 for (const node of nodesToTry) {
                     try {
-                        const radioRes = await node.search({ query: radioUrl }, lastTrack.requester);
+                        const radioPromise = node.search({ query: radioUrl }, lastTrack.requester);
+                        const timeoutPromise = new Promise((r) => setTimeout(() => r(null), 3500));
+                        const radioRes = await Promise.race([radioPromise, timeoutPromise]);
                         if (radioRes?.tracks?.length && radioRes.loadType !== "error" && radioRes.loadType !== "empty") {
                             const validCandidates = radioRes.tracks.filter((t) => !historyIds.has(t.info.identifier) &&
                                 !restrictedTrackIds.has(t.info.identifier) &&
@@ -437,11 +427,13 @@ export function initLavalink(client) {
                                 let candidate;
                                 if (isRecentSameArtist && otherArtistCandidates.length > 0) {
                                     candidate = otherArtistCandidates[0];
-                                    console.log(`[Smart Autoplay] Diversifying: Selected related artist "${candidate.info.author}" to balance "${rawAuthor}"`);
+                                    if (candidate)
+                                        console.log(`[Smart Autoplay] Diversifying: Selected related artist "${candidate.info.author}" to balance "${rawAuthor}"`);
                                 }
                                 else if (otherArtistCandidates.length > 0 && Math.random() < 0.65) {
                                     candidate = otherArtistCandidates[Math.floor(Math.random() * Math.min(3, otherArtistCandidates.length))];
-                                    console.log(`[Smart Autoplay] Genre match from related artist "${candidate.info.author}"`);
+                                    if (candidate)
+                                        console.log(`[Smart Autoplay] Genre match from related artist "${candidate.info.author}"`);
                                 }
                                 else {
                                     candidate = sameArtistCandidates[0] || otherArtistCandidates[0] || validCandidates[0];
@@ -456,7 +448,12 @@ export function initLavalink(client) {
                     }
                     catch (e) {
                         const errMsg = e?.message || String(e);
-                        if (errMsg.includes("Unexpected token '<'") || errMsg.includes("<html>") || errMsg.includes("502")) {
+                        if (errMsg.includes("Unexpected token '<'") ||
+                            errMsg.includes("<html>") ||
+                            errMsg.includes("502") ||
+                            errMsg.includes("ConnectTimeoutError") ||
+                            errMsg.includes("fetch failed") ||
+                            errMsg.includes("timeout")) {
                             markNodeDegraded(node.id);
                         }
                         console.warn(`[Smart Autoplay] RD Radio lookup on node "${node.id}" failed:`, errMsg);
@@ -478,7 +475,9 @@ export function initLavalink(client) {
                         break;
                     for (const node of nodesToTry) {
                         try {
-                            const recRes = await node.search({ query, source: "ytmsearch" }, lastTrack.requester);
+                            const searchPromise = node.search({ query, source: "ytmsearch" }, lastTrack.requester);
+                            const timeoutPromise = new Promise((r) => setTimeout(() => r(null), 3500));
+                            const recRes = await Promise.race([searchPromise, timeoutPromise]);
                             if (recRes?.tracks?.length && recRes.loadType !== "empty" && recRes.loadType !== "error") {
                                 const candidate = recRes.tracks.find((t) => !historyIds.has(t.info.identifier) &&
                                     !restrictedTrackIds.has(t.info.identifier) &&
@@ -494,7 +493,12 @@ export function initLavalink(client) {
                         }
                         catch (e) {
                             const errMsg = e?.message || String(e);
-                            if (errMsg.includes("Unexpected token '<'") || errMsg.includes("<html>") || errMsg.includes("502")) {
+                            if (errMsg.includes("Unexpected token '<'") ||
+                                errMsg.includes("<html>") ||
+                                errMsg.includes("502") ||
+                                errMsg.includes("ConnectTimeoutError") ||
+                                errMsg.includes("fetch failed") ||
+                                errMsg.includes("timeout")) {
                                 markNodeDegraded(node.id);
                             }
                             console.warn(`[Smart Autoplay] Search failed on "${node.id}" for query "${query}":`, errMsg);
@@ -761,10 +765,6 @@ export function getBestNode() {
     const jirayu = lavalink.nodeManager.nodes.get("Jirayu-AuxNode");
     if (jirayu?.connected && isNodeHealthy("Jirayu-AuxNode"))
         return "Jirayu-AuxNode";
-    // Priority 4: Serenetia (only if healthy)
-    const serenetia = lavalink.nodeManager.nodes.get("Serenetia-HighSpeed");
-    if (serenetia?.connected && isNodeHealthy("Serenetia-HighSpeed"))
-        return "Serenetia-HighSpeed";
     const anyHealthy = Array.from(lavalink.nodeManager.nodes.values()).find((n) => n.connected && isNodeHealthy(n.id) && !n.id.includes("Custom"));
     if (anyHealthy)
         return anyHealthy.id;
@@ -839,8 +839,8 @@ export async function getOrCreatePlayer(interaction) {
             };
         }
     }
-    else if (!isNodeHealthy(player.node?.id) || player.node?.id === "Serenetia-HighSpeed") {
-        // If existing player was assigned to a degraded node (e.g. Serenetia throwing 502), migrate to best healthy node
+    else if (!isNodeHealthy(player.node?.id)) {
+        // If existing player was assigned to a degraded node, migrate to best healthy node
         const bestNodeId = getBestNode();
         if (bestNodeId && bestNodeId !== player.node?.id) {
             const betterNode = lavalink.nodeManager.nodes.get(bestNodeId);

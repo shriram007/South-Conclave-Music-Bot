@@ -1,5 +1,5 @@
 import { EmbedBuilder, SlashCommandBuilder, } from "discord.js";
-import { getOrCreatePlayer, isNodeHealthy, lavalink, markNodeDegraded, restrictedTrackIds, updateActivePlayerMessage } from "../lavalink/client.js";
+import { getBestNode, getOrCreatePlayer, isNodeHealthy, lavalink, markNodeDegraded, restrictedTrackIds, updateActivePlayerMessage } from "../lavalink/client.js";
 import { autoDeleteReply } from "../utils/cleanup.js";
 import { getFavorites } from "../utils/favorites.js";
 import { formatDuration, getSourceInfo, isRelevantTrack } from "../utils/formatters.js";
@@ -101,16 +101,15 @@ async function smartSearch(player, query, isUrl, user) {
     const triniumStudio = healthyNodes.find((n) => n.id === "Trinium-Studio");
     const otherHealthy = healthyNodes.filter((n) => n.id !== "Millo-BackupNode" && n.id !== "Trinium-FastNode" && n.id !== "Trinium-Studio");
     const degradedList = connectedNodes.filter((n) => !isNodeHealthy(n.id));
-    // Try current player node if healthy, otherwise Millo -> Trinium -> others
+    // Try current player node if healthy, otherwise Millo -> Trinium -> others. Never query degraded nodes unless no healthy nodes exist.
     const playerNodeIfHealthy = (player.node?.connected && isNodeHealthy(player.node.id)) ? [player.node] : [];
-    const nodesToTry = [
+    const nodesToTry = healthyNodes.length > 0 ? [
         ...playerNodeIfHealthy,
         ...(milloNode && milloNode.id !== player.node?.id ? [milloNode] : []),
         ...(triniumFast && triniumFast.id !== player.node?.id ? [triniumFast] : []),
         ...(triniumStudio && triniumStudio.id !== player.node?.id ? [triniumStudio] : []),
         ...otherHealthy.filter((n) => n.id !== player.node?.id),
-        ...degradedList,
-    ];
+    ] : degradedList;
     // Helper to ensure player is assigned to the healthy resolving node
     const syncPlayerNode = (targetNode) => {
         if (player.node && player.node.id !== targetNode.id && (!player.node.connected || !isNodeHealthy(player.node.id))) {
@@ -118,10 +117,27 @@ async function smartSearch(player, query, isUrl, user) {
             player.changeNode(targetNode, false).catch(() => { });
         }
     };
+    const executeSearchWithTimeout = async (node, searchOpts, timeoutMs = 3500) => {
+        const searchPromise = node.search(searchOpts, user);
+        const timeoutPromise = new Promise((r) => setTimeout(() => r(null), timeoutMs));
+        return Promise.race([searchPromise, timeoutPromise]);
+    };
+    const handleSearchError = (node, e, label) => {
+        const errMsg = e?.message || String(e);
+        if (errMsg.includes("Unexpected token '<'") ||
+            errMsg.includes("<html>") ||
+            errMsg.includes("502") ||
+            errMsg.includes("ConnectTimeoutError") ||
+            errMsg.includes("fetch failed") ||
+            errMsg.includes("timeout")) {
+            markNodeDegraded(node.id);
+        }
+        console.warn(`[SmartSearch] ${label} on "${node.id}" failed:`, errMsg);
+    };
     // 1. Try YouTube Music (ytmsearch) across connected healthy nodes
     for (const node of nodesToTry) {
         try {
-            const res = await node.search({ query, source: "ytmsearch" }, user);
+            const res = await executeSearchWithTimeout(node, { query, source: "ytmsearch" });
             if (res?.tracks?.length && res.loadType !== "empty" && res.loadType !== "error") {
                 const viable = res.tracks.filter((t) => !restrictedTrackIds.has(t.info.identifier));
                 if (viable.length > 0) {
@@ -132,17 +148,13 @@ async function smartSearch(player, query, isUrl, user) {
             }
         }
         catch (e) {
-            const errMsg = e?.message || String(e);
-            if (errMsg.includes("Unexpected token '<'") || errMsg.includes("<html>") || errMsg.includes("502")) {
-                markNodeDegraded(node.id);
-            }
-            console.warn(`[SmartSearch] ytmsearch on "${node.id}" failed:`, errMsg);
+            handleSearchError(node, e, "ytmsearch");
         }
     }
     // 2. Try YouTube search appending "audio" (favors authentic studio tracks over age-gated music videos)
     for (const node of nodesToTry) {
         try {
-            const res = await node.search({ query: `${query} audio`, source: "ytsearch" }, user);
+            const res = await executeSearchWithTimeout(node, { query: `${query} audio`, source: "ytsearch" });
             if (res?.tracks?.length && res.loadType !== "empty" && res.loadType !== "error") {
                 const viable = res.tracks.filter((t) => !restrictedTrackIds.has(t.info.identifier) && isRelevantTrack(t.info.title, query));
                 if (viable.length > 0) {
@@ -153,16 +165,13 @@ async function smartSearch(player, query, isUrl, user) {
             }
         }
         catch (e) {
-            const errMsg = e?.message || String(e);
-            if (errMsg.includes("Unexpected token '<'") || errMsg.includes("<html>") || errMsg.includes("502")) {
-                markNodeDegraded(node.id);
-            }
+            handleSearchError(node, e, "ytsearch (audio)");
         }
     }
     // 3. Try SoundCloud search (scsearch) - ZERO YouTube login walls, fast & unrestricted, verified relevance
     for (const node of nodesToTry) {
         try {
-            const res = await node.search({ query, source: "scsearch" }, user);
+            const res = await executeSearchWithTimeout(node, { query, source: "scsearch" });
             if (res?.tracks?.length && res.loadType !== "empty" && res.loadType !== "error") {
                 const viable = res.tracks.filter((t) => !restrictedTrackIds.has(t.info.identifier) && isRelevantTrack(t.info.title, query));
                 if (viable.length > 0) {
@@ -173,16 +182,13 @@ async function smartSearch(player, query, isUrl, user) {
             }
         }
         catch (e) {
-            const errMsg = e?.message || String(e);
-            if (errMsg.includes("Unexpected token '<'") || errMsg.includes("<html>") || errMsg.includes("502")) {
-                markNodeDegraded(node.id);
-            }
+            handleSearchError(node, e, "scsearch");
         }
     }
     // 4. Standard ytsearch fallback
     for (const node of nodesToTry) {
         try {
-            const res = await node.search({ query, source: "ytsearch" }, user);
+            const res = await executeSearchWithTimeout(node, { query, source: "ytsearch" });
             if (res?.tracks?.length && res.loadType !== "empty" && res.loadType !== "error") {
                 const viable = res.tracks.filter((t) => !restrictedTrackIds.has(t.info.identifier));
                 if (viable.length > 0) {
@@ -193,10 +199,7 @@ async function smartSearch(player, query, isUrl, user) {
             }
         }
         catch (e) {
-            const errMsg = e?.message || String(e);
-            if (errMsg.includes("Unexpected token '<'") || errMsg.includes("<html>") || errMsg.includes("502")) {
-                markNodeDegraded(node.id);
-            }
+            handleSearchError(node, e, "ytsearch");
         }
     }
     return null;
@@ -286,9 +289,9 @@ export const playCommand = {
             // Priority 3: Fast Lavalink node track lookup (bounded to strict 700ms race)
             if (choices.length < 8) {
                 try {
-                    const serenetia = lavalink.nodeManager.nodes.get("Serenetia-HighSpeed");
-                    const connectedNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected);
-                    const nodeToUse = serenetia?.connected ? serenetia : connectedNodes[0];
+                    const bestId = getBestNode();
+                    const healthyNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected && isNodeHealthy(n.id));
+                    const nodeToUse = (bestId ? lavalink.nodeManager.nodes.get(bestId) : null) || healthyNodes[0];
                     if (nodeToUse) {
                         const searchPromise = nodeToUse.search({ query: trimmed, source: "ytmsearch" }, interaction.user);
                         const timeoutPromise = new Promise((r) => setTimeout(() => r(null), 700));
@@ -362,14 +365,15 @@ export const playCommand = {
                 autoDeleteReply(interaction, 10000);
                 return;
             }
-            // Ensure player is operating on proxy nodes (with active YouTube proxies) instead of blocked nodes
-            if (player.node?.id === "Trinium-FastNode" || player.node?.id === "Jirayu-AuxNode") {
-                const serenetia = lavalink.nodeManager.nodes.get("Serenetia-HighSpeed");
-                const millo = lavalink.nodeManager.nodes.get("Millo-BackupNode");
-                const betterNode = serenetia?.connected ? serenetia : (millo?.connected ? millo : null);
-                if (betterNode && betterNode.id !== player.node.id) {
-                    console.log(`[Play Command] Migrating player from ${player.node.id} to ${betterNode.id}...`);
-                    await player.changeNode(betterNode, false).catch(() => { });
+            // Ensure player is operating on best healthy node if current node is degraded or disconnected
+            if (!player.node || !player.node.connected || !isNodeHealthy(player.node.id)) {
+                const bestNodeId = getBestNode();
+                if (bestNodeId && bestNodeId !== player.node?.id) {
+                    const betterNode = lavalink.nodeManager.nodes.get(bestNodeId);
+                    if (betterNode?.connected) {
+                        console.log(`[Play Command] Migrating player from ${player.node?.id || "disconnected"} to healthy "${betterNode.id}"...`);
+                        await player.changeNode(betterNode, false).catch(() => { });
+                    }
                 }
             }
             // Check if the user explicitly provided a genuine Playlist or Album URL (not an algorithmic mix)
