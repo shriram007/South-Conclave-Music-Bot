@@ -958,7 +958,7 @@ export function initLavalink(client: Client) {
         const alternateNodes = Array.from(lavalink.nodeManager.nodes.values())
           .filter(n => n.connected && n.id !== player.node.id)
           .sort((a, b) => Number(isNodeHealthy(b.id)) - Number(isNodeHealthy(a.id)));
-        const result = await resolveRecoveryTrack(track, [...alternateNodes, player.node], recoveryIsCurrent);
+        const result = await resolveRecoveryTrack(track, [...alternateNodes, player.node], recoveryIsCurrent, player.node.id);
         const recoveredTrack = result?.track;
         const targetNode = result?.node;
 

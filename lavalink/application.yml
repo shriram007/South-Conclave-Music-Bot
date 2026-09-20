@@ -56,10 +56,12 @@ plugins:
     allowDirectVideoIds: true
     allowDirectPlaylistIds: true
 
-    # MUSIC handles ytmsearch. TV is the OAuth playback client. WEB clients
-    # provide anonymous fallback for videos that do not require authentication.
+    # MUSIC handles ytmsearch only. Prefer the current non-Web playback clients;
+    # TV remains the OAuth fallback, while WEB clients are last-resort fallbacks.
     clients:
       - MUSIC
+      - ANDROID_VR
+      - TVHTML5_SIMPLY
       - TV
       - WEB
       - WEBEMBEDDED

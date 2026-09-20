@@ -127,16 +127,15 @@ test('Jio CDN load rejects a different file instead of relabeling it as the requ
   assert.equal(loaded.track.info.sourceName, 'http');
 });
 
-test('exact video recovery cannot switch to a title match or another song', async () => {
+test('exact video recovery skips the failed node and cannot switch to another song', async () => {
   const original = { info: info(), userData: { requestedVideoId: '29WzIwFvVdg' } };
   const calls = [];
   const badNode = { id: 'bad', connected: true, search: async opts => { calls.push(opts); return { tracks: [{ info: info('Anthaathi', 'wrongSong12') }] }; } };
-  assert.equal(await resolveRecoveryTrack(original, [badNode], () => true), null);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].source, undefined);
+  assert.equal(await resolveRecoveryTrack(original, [badNode], () => true, 'bad'), null);
+  assert.equal(calls.length, 0);
   const exact = { info: info(), encoded: 'exact' };
   const goodNode = { id: 'good', connected: true, search: async () => ({ tracks: [exact] }) };
-  assert.equal((await resolveRecoveryTrack(original, [goodNode], () => true)).track, exact);
+  assert.equal((await resolveRecoveryTrack(original, [badNode, goodNode], () => true, 'bad')).track, exact);
 });
 
 test('recovery result is discarded when a newer playback starts while search is pending', async () => {

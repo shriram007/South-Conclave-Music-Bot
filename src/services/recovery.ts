@@ -3,8 +3,13 @@ import { authorConfidence, rankSearchTracks, sameRecording } from '../utils/trac
 import { parseTrackTitle } from '../utils/formatters.js';
 import { loadJioSaavnAsLavalinkTrack, resolveJioSaavnTrack, resolveJioSaavnUrl } from './jiosaavn.js';
 
-/** Bounded recovery. Explicit video links can only recover the same video. */
-export async function resolveRecoveryTrack(original: any, candidateNodes: any[], isCurrent: () => boolean): Promise<{ track: any; node: any } | null> {
+/** Bounded recovery. Explicit video links can only recover the same video or a strictly matched catalog recording. */
+export async function resolveRecoveryTrack(
+  original: any,
+  candidateNodes: any[],
+  isCurrent: () => boolean,
+  failedNodeId?: string,
+): Promise<{ track: any; node: any } | null> {
   const deadline = Date.now() + 14000;
   const nodes = candidateNodes.filter((n, i, all) => n?.connected && all.findIndex(x => x?.id === n.id) === i).slice(0, 3);
   const active = () => isCurrent() && Date.now() < deadline;
@@ -18,7 +23,11 @@ export async function resolveRecoveryTrack(original: any, candidateNodes: any[],
   const exactId = original.userData?.requestedVideoId;
   const directUri = exactId ? `https://www.youtube.com/watch?v=${exactId}` : original.userData?.streamUri || original.info.uri;
   if (directUri) {
-    const results = await Promise.all(nodes.map(async node => {
+    // Loading metadata for the same encoded YouTube track on the node that just
+    // failed does not prove its audio stream works. Only retry that exact source
+    // on a different node; the failed node can still carry an HTTP/Jio fallback.
+    const directNodes = failedNodeId ? nodes.filter(node => node.id !== failedNodeId) : nodes;
+    const results = await Promise.all(directNodes.map(async node => {
       const tracks = await search(node, directUri);
       const track = tracks.find(t => exactId
         ? t.info.identifier === exactId && /youtube/i.test(t.info.sourceName)
