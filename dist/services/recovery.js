@@ -41,6 +41,22 @@ export async function resolveRecoveryTrack(original, candidateNodes, isCurrent) 
         if (active() && matched)
             return matched;
     }
+    if (!active())
+        return null;
+    // High-fidelity fallback to JioSaavn 320 kbps Studio Master if YouTube playback failed
+    try {
+        const jio = original.userData?.isJioSaavn
+            ? await withTimeout(resolveJioSaavnUrl(original.info.uri), Math.min(4000, deadline - Date.now())).then(r => r?.type === 'track' ? r.track : null)
+            : await withTimeout(resolveJioSaavnTrack(original.info.title, original.info.author), Math.min(4000, deadline - Date.now()));
+        if (active() && jio && sameRecording({ title: jio.title, author: jio.artist, duration: jio.duration * 1000 }, original.info)) {
+            const loaded = await withTimeout(loadJioSaavnAsLavalinkTrack(jio, original.requester, nodes), Math.min(3000, deadline - Date.now()));
+            if (active() && loaded) {
+                console.log(`[Universal Recovery] Successfully recovered blocked track "${original.info.title}" via JioSaavn 320 kbps Studio Master.`);
+                return loaded;
+            }
+        }
+    }
+    catch { }
     if (exactId || !active())
         return null;
     const parsed = parseTrackTitle(original.info.title, original.info.author);
@@ -58,14 +74,6 @@ export async function resolveRecoveryTrack(original, candidateNodes, isCurrent) 
     }
     if (!active())
         return null;
-    const jio = original.userData?.isJioSaavn
-        ? await withTimeout(resolveJioSaavnUrl(original.info.uri), Math.min(4000, deadline - Date.now())).then(r => r?.type === 'track' ? r.track : null)
-        : await withTimeout(resolveJioSaavnTrack(original.info.title, original.info.author), Math.min(4000, deadline - Date.now()));
-    if (active() && jio && sameRecording({ title: jio.title, author: jio.artist, duration: jio.duration * 1000 }, original.info)) {
-        const loaded = await withTimeout(loadJioSaavnAsLavalinkTrack(jio, original.requester, nodes), Math.min(3000, deadline - Date.now()));
-        if (active() && loaded)
-            return loaded;
-    }
     if (!active() || original.userData?.isJioSaavn)
         return null;
     // Last resort: a recognized original upload, never an arbitrary SoundCloud cover.
