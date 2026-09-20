@@ -1,12 +1,44 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseTrackTitle, getSourceInfo } from '../dist/utils/formatters.js';
-import { sameTitle, sameRecording, rankSearchTracks } from '../dist/utils/trackSelection.js';
+import { sameTitle, sameRecording, rankSearchTracks, isPreferredRadioUpload } from '../dist/utils/trackSelection.js';
+import { nodeErrorSummary } from '../dist/utils/nodeDiagnostics.js';
 import { isFuzzyTitleMatch, parseJioSaavnSong } from '../dist/services/jiosaavn.js';
 import { applyLoudnessNormalization } from '../dist/commands/normalize.js';
 import CryptoJS from 'crypto-js';
 
 const track = (title, author, duration = 240000) => ({ info: { title, author, duration } });
+
+test('radio excludes unknown reuploads and edited versions even without an official alternative', () => {
+  assert.equal(isPreferredRadioUpload(track('High on Love', 'Random uploader').info), false);
+  assert.equal(isPreferredRadioUpload(track('High on Love', 'Sid Sriram - Topic').info), true);
+  assert.equal(isPreferredRadioUpload(track('High on Love (Cover)', 'Sid Sriram - Topic').info), false);
+  assert.equal(isPreferredRadioUpload(track('High on Love', 'Sony Music South').info), true);
+});
+
+test('empty aggregate transport errors expose nested codes without leaking request data', () => {
+  const error = new AggregateError([Object.assign(new Error('secret URL and authorization'), { code: 'ECONNREFUSED' })], '');
+  const summary = nodeErrorSummary(error);
+  assert.match(summary, /ECONNREFUSED/);
+  assert.doesNotMatch(summary, /secret|authorization/);
+  assert.match(nodeErrorSummary(new Error('Unexpected server response: 401')), /HTTP 401/);
+  assert.match(nodeErrorSummary(new Error('')), /without a transport code/);
+});
+
+test('public-only node configuration does not reconnect to a disabled custom endpoint', async () => {
+  const { config } = await import('../dist/config.js');
+  const { getMasterNodeConfigs } = await import('../dist/lavalink/client.js');
+  const before = { ...config.lavalink };
+  try {
+    config.lavalink.customEnabled = false;
+    config.lavalink.publicFallbacks = true;
+    const nodes = getMasterNodeConfigs();
+    assert.ok(nodes.length > 0);
+    assert.equal(nodes.some(n => n.id === 'Primary-CustomNode'), false);
+    config.lavalink.publicFallbacks = false;
+    assert.equal(getMasterNodeConfigs().length, 0);
+  } finally { Object.assign(config.lavalink, before); }
+});
 
 test('Indian pipe title keeps Anthaathi, album, and composer', () => {
   const p = parseTrackTitle('96 Songs | Anthaathi Video Song | Vijay Sethupathi, Trisha | Govind Vasantha', 'Think Music India');

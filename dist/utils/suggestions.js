@@ -21,6 +21,7 @@ async function getSpotifyToken() {
                 "Content-Type": "application/x-www-form-urlencoded",
             },
             body: "grant_type=client_credentials",
+            signal: AbortSignal.timeout(600),
         });
         if (resp.ok) {
             const data = (await resp.json());
@@ -46,13 +47,11 @@ function formatTime(seconds) {
 async function searchSpotify(query, token) {
     const suggestions = [];
     try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 1200);
+        const signal = AbortSignal.timeout(1200);
         const resp = await fetch(`https://api.spotify.com/v1/search?q=${encodeURIComponent(query)}&type=track,playlist&limit=12`, {
             headers: { Authorization: `Bearer ${token}` },
-            signal: controller.signal,
+            signal,
         });
-        clearTimeout(timeout);
         if (resp.ok) {
             const data = (await resp.json());
             // 1. Spotify Tracks: 🎵 Artist - Title - MM:SS
@@ -90,18 +89,16 @@ async function searchSpotify(query, token) {
     return suggestions;
 }
 /**
- * Searches Apple Music / iTunes Music Catalog API (Zero-config, sub-500ms, 100% reliable)
+ * Searches Apple Music / iTunes Music Catalog API (Zero-config, sub-500ms, bounded requests)
  */
 async function searchAppleMusic(query) {
     const suggestions = [];
     try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 1400);
+        const signal = AbortSignal.timeout(1400);
         const [songResp, albumResp] = await Promise.all([
-            fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&media=music&entity=song&limit=14`, { signal: controller.signal }),
-            fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&media=music&entity=album&limit=3`, { signal: controller.signal }),
+            fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&media=music&entity=song&limit=14`, { signal }),
+            fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&media=music&entity=album&limit=3`, { signal }),
         ]);
-        clearTimeout(timeout);
         // 1. Song Tracks: 🎵 Artist - Title - MM:SS
         if (songResp.ok) {
             const songData = (await songResp.json());
@@ -190,9 +187,6 @@ export async function getMusicSuggestions(query, userFavorites = [], userPlaylis
     // Check in-memory cache
     const cacheKey = trimmed.toLowerCase();
     const cached = suggestionCache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
-        return cached.data;
-    }
     const results = [];
     // 1. Match against user's custom playlists
     for (const p of userPlaylists) {
@@ -213,37 +207,26 @@ export async function getMusicSuggestions(query, userFavorites = [], userPlaylis
             });
         }
     }
-    // 3. Search Spotify (if credentials exist) or Apple Music / iTunes Catalog
-    const spotifyToken = await getSpotifyToken();
-    if (spotifyToken) {
-        const spotifyResults = await searchSpotify(trimmed, spotifyToken);
-        for (const item of spotifyResults) {
-            if (!results.some((r) => r.value.toLowerCase() === item.value.toLowerCase())) {
-                results.push(item);
-            }
+    // Cache only public catalog results; personal favorites/playlists stay request-local.
+    let catalog = cached && Date.now() - cached.timestamp < CACHE_TTL_MS ? cached.data : undefined;
+    if (!catalog) {
+        const token = await getSpotifyToken();
+        // Query providers concurrently to keep autocomplete responsive on partial outages.
+        const [spotify, apple] = await Promise.all([
+            token ? searchSpotify(trimmed, token) : Promise.resolve([]),
+            searchAppleMusic(trimmed),
+        ]);
+        catalog = [...spotify, ...apple];
+        if (catalog.length) {
+            if (suggestionCache.size >= 500)
+                suggestionCache.delete(suggestionCache.keys().next().value);
+            suggestionCache.set(cacheKey, { timestamp: Date.now(), data: catalog });
         }
     }
-    // If Spotify wasn't available or returned few results, query Apple Music catalog
-    if (results.length < 10) {
-        const appleResults = await searchAppleMusic(trimmed);
-        for (const item of appleResults) {
-            if (!results.some((r) => r.value.toLowerCase() === item.value.toLowerCase())) {
-                results.push(item);
-            }
-        }
+    for (const item of catalog) {
+        if (!results.some(r => r.value.toLowerCase() === item.value.toLowerCase()))
+            results.push(item);
     }
-    const finalResults = results.slice(0, 20);
-    // Cache final response with bounded FIFO eviction (max 500 items)
-    if (finalResults.length > 0) {
-        if (suggestionCache.size >= 500) {
-            const oldestKey = suggestionCache.keys().next().value;
-            if (oldestKey)
-                suggestionCache.delete(oldestKey);
-        }
-        suggestionCache.set(cacheKey, {
-            timestamp: Date.now(),
-            data: finalResults,
-        });
-    }
+    const finalResults = results.filter(item => item.value.length <= 100).slice(0, 20);
     return finalResults;
 }

@@ -42,7 +42,7 @@ For control over encoder settings, source-plugin updates, and diagnostics, use y
 
 ## Validation
 
-The current suite contains 28 passing offline tests.
+The current suite contains 31 passing offline tests.
 
 Run `npm test`: TypeScript build plus offline regression tests for the reported titles, incorrect substitutions, upload ranking, normalization, JioSaavn quality flags, delayed autoplay cancellation, YTM-first search, and single queue advancement after stalls, exact-video recovery, node-confirmed metadata, strict seeking, UI component limits, JioSaavn CDN identity, and JioSaavn language/quality selection. `git diff --check` checks patch whitespace.
 
@@ -57,6 +57,16 @@ Before calling this production-verified, test in a Discord voice channel:
 7. Force a node stall and confirm exactly one queue advance; restart and confirm session restoration including volume zero.
 
 ## Remaining limits
+
+### Pterodactyl log follow-up
+
+The latest supplied log shows two separate failures: YouTube rejects stream requests on public nodes, while `Primary-CustomNode` repeatedly loses its WebSocket. In lavalink-client 2.11.0, the phrase “Socket got terminated due to no ping connection” is a fallback for code 1006 with no reason, not proof of heartbeat failure. Node errors now extract nested AggregateError transport codes and HTTP upgrade statuses without dumping request credentials.
+
+The local configuration uses loopback. In Pterodactyl, a separate Java server needs a reachable allocation, correct port/password and matching TLS setting. A startup diagnostic now explains this. To intentionally run only public nodes, set `LAVALINK_CUSTOM_ENABLED=false` and `LAVALINK_PUBLIC_FALLBACKS=true`; this stops custom-node creation/revival but cannot fix YouTube restrictions on the public nodes. No deployment environment was changed. A configuration with no enabled nodes fails early.
+
+YouTube autoplay now requires a Topic/VEVO or recognized-label channel hint before selecting a candidate, including its later studio replacement. Otherwise it continues discovery and then tries JioSaavn. This prevents an arbitrary uploader winning simply because no recognized alternative was returned. It may skip genuine artist channels lacking these hints; channel names still are not verified ownership. Explicit user requests remain unaffected.
+
+Spotify credentials are optional catalog metadata credentials, not audio credentials. The bot uses client credentials and does not run a user-login callback. If the developer form requires a redirect URI, `http://127.0.0.1:8888/callback` is a permitted loopback example and remains unused here. The development-mode app owner currently needs Premium. See [Spotify redirect requirements](https://developer.spotify.com/documentation/web-api/concepts/redirect_uri), [client credentials](https://developer.spotify.com/documentation/web-api/tutorials/client-credentials-flow), and [quota modes](https://developer.spotify.com/documentation/web-api/concepts/quota-modes).
 
 No live provider, Java-node, Discord voice, or listening tests were performed. The matching policy is intentionally conservative: ambiguous artist/album metadata may yield no substitute rather than risk a different recording. Channel names can be spoofed; language inference remains heuristic. Resolving a track in advance prefetches metadata, not decoded audio, so transitions are not guaranteed gapless. Public-node availability, YouTube authorization, and source bitrates are outside this TypeScript process's control.
 

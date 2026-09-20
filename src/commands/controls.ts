@@ -47,7 +47,7 @@ export const pauseCommand = {
 
     await smoothFadePause(player);
     await updateActivePlayerMessage(player, true);
-    await interaction.reply("⏸️ Playback paused (smooth fade-out).");
+    await interaction.reply("⏸️ Playback paused.");
     autoDeleteReply(interaction, 8000);
   },
 };
@@ -64,7 +64,7 @@ export const resumeCommand = {
 
     await smoothFadeResume(player);
     await updateActivePlayerMessage(player, true);
-    await interaction.reply("▶️ Playback resumed (smooth fade-in).");
+    await interaction.reply("▶️ Playback resumed.");
     autoDeleteReply(interaction, 8000);
   },
 };
@@ -222,47 +222,21 @@ export const seekCommand = {
   },
 };
 
-function parseIndicesToRemove(trackInput: string, toInput?: number | null, queueLength: number = 0): { indices: number[]; error?: string } {
-  const clean = trackInput.trim().toLowerCase();
-  const set = new Set<number>();
-
-  if (toInput && !isNaN(toInput)) {
-    const from = parseInt(clean, 10);
-    if (isNaN(from)) return { indices: [], error: "❌ 'track' must be a valid number when using 'to' range." };
-    const start = Math.min(from, toInput);
-    const end = Math.max(from, toInput);
-    for (let i = start; i <= end; i++) set.add(i);
-  } else if (clean.includes("to")) {
-    const parts = clean.split(/\s*to\s*/);
-    const from = parseInt(parts[0], 10);
-    const to = parseInt(parts[1], 10);
-    if (isNaN(from) || isNaN(to)) return { indices: [], error: "❌ Invalid range format. Use e.g. `2 to 5` or `2-5`." };
-    const start = Math.min(from, to);
-    const end = Math.max(from, to);
-    for (let i = start; i <= end; i++) set.add(i);
-  } else {
-    const chunks = clean.split(/[,;\s]+/);
-    for (const chunk of chunks) {
-      if (!chunk) continue;
-      if (chunk.includes("-")) {
-        const [rStart, rEnd] = chunk.split("-").map(Number);
-        if (isNaN(rStart) || isNaN(rEnd)) return { indices: [], error: `❌ Invalid range: \`${chunk}\`` };
-        const start = Math.min(rStart, rEnd);
-        const end = Math.max(rStart, rEnd);
-        for (let i = start; i <= end; i++) set.add(i);
-      } else {
-        const num = parseInt(chunk, 10);
-        if (isNaN(num)) return { indices: [], error: `❌ Invalid track number: \`${chunk}\`` };
-        set.add(num);
-      }
+export function parseIndicesToRemove(trackInput: string, toInput?: number | null, queueLength = 0): { indices: number[]; error?: string } {
+  const indices = new Set<number>();
+  const input = toInput != null ? `${trackInput.trim()}-${toInput}` : trackInput.trim().replace(/\s+to\s+/gi, '-').replace(/\s*-\s*/g, '-');
+  for (const chunk of input.split(/[,;\s]+/).filter(Boolean)) {
+    const match = chunk.match(/^(\d+)(?:-(\d+))?$/);
+    if (!match) return { indices: [], error: 'Use track numbers or ranges, such as 1, 3, 5-8.' };
+    const from = Number(match[1]), to = Number(match[2] ?? match[1]);
+    if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 1 || to < 1) {
+      return { indices: [], error: 'Track positions must be positive whole numbers.' };
     }
+    // Clamp before iterating: enormous input ranges must never block the event loop.
+    for (let n = Math.max(1, Math.min(from, to)); n <= Math.min(queueLength, Math.max(from, to)); n++) indices.add(n);
   }
-
-  const indices = Array.from(set).filter((n) => n >= 1 && n <= queueLength).sort((a, b) => b - a);
-  if (indices.length === 0) {
-    return { indices: [], error: `❌ No valid track numbers found within current queue size (${queueLength}).` };
-  }
-  return { indices };
+  return indices.size ? { indices: [...indices].sort((a, b) => b - a) }
+    : { indices: [], error: `No matching positions in the current queue (${queueLength} tracks).` };
 }
 
 export const removeCommand = {

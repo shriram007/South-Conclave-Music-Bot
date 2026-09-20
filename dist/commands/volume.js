@@ -7,7 +7,7 @@ export const volumeCommand = {
         .setDescription("Adjust the playback volume (0% - 100%)")
         .addIntegerOption((opt) => opt
         .setName("level")
-        .setDescription("Volume level (0 to 100%. Recommended: 70-90% for normal listening, 100% studio max)")
+        .setDescription("Volume level: 0 mutes, 100 applies no volume attenuation")
         .setMinValue(0)
         .setMaxValue(100)
         .setRequired(true)),
@@ -28,11 +28,7 @@ export const volumeCommand = {
             icon = "🔇";
         else if (vol < 50)
             icon = "🔉";
-        let notice = "";
-        if (vol > 90 && vol <= 100) {
-            notice = " *(Studio unity standard. For casual listening, 70%–90% is optimal)*";
-        }
-        await interaction.reply(`${icon} Volume adjusted to **${vol}%**${notice}`);
+        await interaction.reply(`${icon} Volume adjusted to **${vol}%**`);
         autoDeleteReply(interaction, 8000);
     },
 };

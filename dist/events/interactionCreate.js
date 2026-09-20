@@ -5,7 +5,7 @@ import { commandMap } from "../commands/index.js";
 import { fetchSongLyrics } from "../commands/lyrics.js";
 import { clearAllFilters, getBestNode, isNodeHealthy, lavalink, markNodeDegraded, smoothFadePause, smoothFadeResume, updateActivePlayerMessage, validateVoiceGate, } from "../lavalink/client.js";
 import { buildPlayerMessage } from "../lavalink/playerUI.js";
-import { buildQueueMessage } from "../lavalink/queueUI.js";
+import { buildQueueMessage, queueSnapshot, visibleQueueTracks } from "../lavalink/queueUI.js";
 import { autoDeleteMessage } from "../utils/cleanup.js";
 import { EQ_PRESETS } from "../utils/equalizer.js";
 import { toggleFavorite } from "../utils/favorites.js";
@@ -132,7 +132,14 @@ async function handleButtonInteraction(interaction) {
             const action = parts[1];
             const page = parseInt(parts[2], 10) || 0;
             const selected = parseInt(parts[3], 10) || 0;
-            const targetIdx = page * 5 + selected;
+            const visibleTracks = visibleQueueTracks(player);
+            const visibleIdx = page * 5 + selected;
+            const targetIdx = player.queue.tracks.indexOf(visibleTracks[visibleIdx]);
+            if (!["prev", "next"].includes(action) && parts[4] !== queueSnapshot(player)) {
+                await interaction.editReply(buildQueueMessage(player, page, 0, interaction.user.username));
+                await interaction.followUp({ content: "The queue changed. Review the refreshed list and try again.", flags: MessageFlags.Ephemeral });
+                return;
+            }
             switch (action) {
                 case "prev": {
                     const newPage = Math.max(0, page - 1);
@@ -160,9 +167,9 @@ async function handleButtonInteraction(interaction) {
                 case "moveup": {
                     let newPage = page;
                     let newSelected = selected;
-                    if (targetIdx > 0 && targetIdx < player.queue.tracks.length) {
+                    if (visibleIdx > 0 && targetIdx >= 0) {
                         const [track] = player.queue.tracks.splice(targetIdx, 1);
-                        player.queue.tracks.splice(targetIdx - 1, 0, track);
+                        player.queue.tracks.splice(player.queue.tracks.indexOf(visibleTracks[visibleIdx - 1]), 0, track);
                         newSelected = selected - 1;
                         if (newSelected < 0 && newPage > 0) {
                             newPage--;
@@ -177,9 +184,9 @@ async function handleButtonInteraction(interaction) {
                 case "movedown": {
                     let newPage = page;
                     let newSelected = selected;
-                    if (targetIdx >= 0 && targetIdx < player.queue.tracks.length - 1) {
+                    if (targetIdx >= 0 && visibleIdx < visibleTracks.length - 1) {
                         const [track] = player.queue.tracks.splice(targetIdx, 1);
-                        player.queue.tracks.splice(targetIdx + 1, 0, track);
+                        player.queue.tracks.splice(player.queue.tracks.indexOf(visibleTracks[visibleIdx + 1]) + 1, 0, track);
                         newSelected = selected + 1;
                         if (newSelected >= 5) {
                             newPage++;
@@ -587,7 +594,8 @@ async function handleSelectMenuInteraction(interaction) {
         // Queue Manager: Switch selected track on current page
         if (interaction.customId.startsWith("qm_select_")) {
             const page = parseInt(interaction.customId.split("_")[2], 10) || 0;
-            const selectedIndex = parseInt(interaction.values[0], 10) || 0;
+            const selectedIndex = interaction.customId.split("_")[3] === queueSnapshot(player)
+                ? parseInt(interaction.values[0], 10) || 0 : 0;
             const queueMsg = buildQueueMessage(player, page, selectedIndex, interaction.user.username);
             await interaction.editReply(queueMsg).catch(() => { });
             return;

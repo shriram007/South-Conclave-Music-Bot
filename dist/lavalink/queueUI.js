@@ -1,15 +1,30 @@
+import { createHash } from "node:crypto";
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, } from "discord.js";
 import { formatDuration, getSourceInfo } from "../utils/formatters.js";
+const trackIds = new WeakMap();
+let nextTrackId = 0;
+export function queueSnapshot(player) {
+    const ids = [player.queue.current, ...player.queue.tracks].map(track => {
+        if (!track)
+            return 0;
+        if (!trackIds.has(track))
+            trackIds.set(track, ++nextTrackId);
+        return trackIds.get(track);
+    });
+    return createHash('sha256').update(JSON.stringify(ids)).digest('hex').slice(0, 16);
+}
+export function visibleQueueTracks(player) {
+    return player.queue.tracks.filter(t => !(t.userData?.isAutoplay ||
+        t.requester?.displayName === "📻 Autoplay Radio" || t.requester?.username === "Autoplay Radio"));
+}
 /**
  * Builds the interactive queue management message matching FlaviBot layout.
  * Allows users to inspect tracks, select any song in the queue, and perform actions:
  * [ 🗑️ Remove ] [ ∧ +1 ] [ ⊼ Top ] [ ∨ -1 ] [ ▶⏸️ Play Now ]
  */
 export function buildQueueMessage(player, page = 0, selectedIndex = 0, initiatorName) {
-    const userTracks = player.queue.tracks.filter((t) => {
-        const isAutoplay = t.requester?.displayName === "📻 Autoplay Radio" || t.requester?.username === "Autoplay Radio" || t.userData?.isAutoplay;
-        return !isAutoplay;
-    });
+    const userTracks = visibleQueueTracks(player);
+    const snapshot = queueSnapshot(player);
     const current = player.queue.current;
     const pageSize = 5;
     const totalPages = Math.max(1, Math.ceil(userTracks.length / pageSize));
@@ -73,22 +88,22 @@ export function buildQueueMessage(player, page = 0, selectedIndex = 0, initiator
     // Row 1: Action Controls for Selected Song
     if (pageTracks.length > 0) {
         const row1 = new ActionRowBuilder().addComponents(new ButtonBuilder()
-            .setCustomId(`qm_remove_${safePage}_${safeSelected}`)
+            .setCustomId(`qm_remove_${safePage}_${safeSelected}_${snapshot}`)
             .setLabel("🗑️ Remove")
             .setStyle(ButtonStyle.Secondary), new ButtonBuilder()
-            .setCustomId(`qm_moveup_${safePage}_${safeSelected}`)
+            .setCustomId(`qm_moveup_${safePage}_${safeSelected}_${snapshot}`)
             .setLabel("▲ Up (+1)")
             .setStyle(ButtonStyle.Secondary)
             .setDisabled(absoluteSelectedIdx === 0), new ButtonBuilder()
-            .setCustomId(`qm_top_${safePage}_${safeSelected}`)
+            .setCustomId(`qm_top_${safePage}_${safeSelected}_${snapshot}`)
             .setLabel("⏫ Top")
             .setStyle(ButtonStyle.Secondary)
             .setDisabled(absoluteSelectedIdx === 0), new ButtonBuilder()
-            .setCustomId(`qm_movedown_${safePage}_${safeSelected}`)
+            .setCustomId(`qm_movedown_${safePage}_${safeSelected}_${snapshot}`)
             .setLabel("▼ Down (-1)")
             .setStyle(ButtonStyle.Secondary)
             .setDisabled(absoluteSelectedIdx === userTracks.length - 1), new ButtonBuilder()
-            .setCustomId(`qm_play_${safePage}_${safeSelected}`)
+            .setCustomId(`qm_play_${safePage}_${safeSelected}_${snapshot}`)
             .setLabel("▶ Play")
             .setStyle(ButtonStyle.Success));
         components.push(row1);
@@ -105,7 +120,7 @@ export function buildQueueMessage(player, page = 0, selectedIndex = 0, initiator
                 return opt;
             });
             const selectMenu = new StringSelectMenuBuilder()
-                .setCustomId(`qm_select_${safePage}`)
+                .setCustomId(`qm_select_${safePage}_${snapshot}`)
                 .setPlaceholder(`🔘 Select song to manage (Currently: #${startIdx + safeSelected + 1})`)
                 .addOptions(options);
             components.push(new ActionRowBuilder().addComponents(selectMenu));
@@ -113,11 +128,11 @@ export function buildQueueMessage(player, page = 0, selectedIndex = 0, initiator
     }
     // Row 3: Page Navigation & Close Button
     const rowNav = new ActionRowBuilder().addComponents(new ButtonBuilder()
-        .setCustomId(`qm_prev_${safePage}_${safeSelected}`)
+        .setCustomId(`qm_prev_${safePage}_${safeSelected}_${snapshot}`)
         .setLabel("◀ Prev")
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(safePage === 0), new ButtonBuilder()
-        .setCustomId(`qm_next_${safePage}_${safeSelected}`)
+        .setCustomId(`qm_next_${safePage}_${safeSelected}_${snapshot}`)
         .setLabel("Next ▶")
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(safePage >= totalPages - 1), new ButtonBuilder()

@@ -26,6 +26,10 @@ export function authorConfidence(author = ''): number {
   if (/think music|sony music|saregama|t-series|zee music|wunderbar films|aditya music|lahari|u1 records|sun pictures|yrf/i.test(author)) return 2;
   return 0;
 }
+/** Conservative radio policy; channel names are hints, not verified ownership. */
+export function isPreferredRadioUpload(track: TrackIdentity): boolean {
+  return !track.isStream && authorConfidence(track.author) >= 2 && !hasUnrequestedVersion(track.title);
+}
 export function sameRecording(candidate: TrackIdentity, target: TrackIdentity): boolean {
   if (candidate.isStream || !sameTitle(candidate.title, target.title) || hasUnrequestedVersion(candidate.title, target.title)) return false;
   const a = parseTrackTitle(candidate.title, candidate.author);

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -8,6 +9,22 @@ import {
 } from "discord.js";
 import { Player } from "lavalink-client";
 import { formatDuration, getSourceInfo } from "../utils/formatters.js";
+
+const trackIds = new WeakMap<object, number>();
+let nextTrackId = 0;
+export function queueSnapshot(player: Player): string {
+  const ids = [player.queue.current, ...player.queue.tracks].map(track => {
+    if (!track) return 0;
+    if (!trackIds.has(track)) trackIds.set(track, ++nextTrackId);
+    return trackIds.get(track);
+  });
+  return createHash('sha256').update(JSON.stringify(ids)).digest('hex').slice(0, 16);
+}
+
+export function visibleQueueTracks(player: Player) {
+  return player.queue.tracks.filter(t => !((t.userData as any)?.isAutoplay ||
+    (t.requester as any)?.displayName === "📻 Autoplay Radio" || (t.requester as any)?.username === "Autoplay Radio"));
+}
 
 export interface QueueMessagePayload {
   embeds: EmbedBuilder[];
@@ -25,10 +42,8 @@ export function buildQueueMessage(
   selectedIndex: number = 0,
   initiatorName?: string
 ): QueueMessagePayload {
-  const userTracks = player.queue.tracks.filter((t) => {
-    const isAutoplay = (t.requester as any)?.displayName === "📻 Autoplay Radio" || (t.requester as any)?.username === "Autoplay Radio" || (t.userData as any)?.isAutoplay;
-    return !isAutoplay;
-  });
+  const userTracks = visibleQueueTracks(player);
+  const snapshot = queueSnapshot(player);
   const current = player.queue.current;
   const pageSize = 5;
   const totalPages = Math.max(1, Math.ceil(userTracks.length / pageSize));
@@ -102,26 +117,26 @@ export function buildQueueMessage(
   if (pageTracks.length > 0) {
     const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
-        .setCustomId(`qm_remove_${safePage}_${safeSelected}`)
+        .setCustomId(`qm_remove_${safePage}_${safeSelected}_${snapshot}`)
         .setLabel("🗑️ Remove")
         .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
-        .setCustomId(`qm_moveup_${safePage}_${safeSelected}`)
+        .setCustomId(`qm_moveup_${safePage}_${safeSelected}_${snapshot}`)
         .setLabel("▲ Up (+1)")
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(absoluteSelectedIdx === 0),
       new ButtonBuilder()
-        .setCustomId(`qm_top_${safePage}_${safeSelected}`)
+        .setCustomId(`qm_top_${safePage}_${safeSelected}_${snapshot}`)
         .setLabel("⏫ Top")
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(absoluteSelectedIdx === 0),
       new ButtonBuilder()
-        .setCustomId(`qm_movedown_${safePage}_${safeSelected}`)
+        .setCustomId(`qm_movedown_${safePage}_${safeSelected}_${snapshot}`)
         .setLabel("▼ Down (-1)")
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(absoluteSelectedIdx === userTracks.length - 1),
       new ButtonBuilder()
-        .setCustomId(`qm_play_${safePage}_${safeSelected}`)
+        .setCustomId(`qm_play_${safePage}_${safeSelected}_${snapshot}`)
         .setLabel("▶ Play")
         .setStyle(ButtonStyle.Success)
     );
@@ -140,7 +155,7 @@ export function buildQueueMessage(
       });
 
       const selectMenu = new StringSelectMenuBuilder()
-        .setCustomId(`qm_select_${safePage}`)
+        .setCustomId(`qm_select_${safePage}_${snapshot}`)
         .setPlaceholder(`🔘 Select song to manage (Currently: #${startIdx + safeSelected + 1})`)
         .addOptions(options);
 
@@ -151,12 +166,12 @@ export function buildQueueMessage(
   // Row 3: Page Navigation & Close Button
   const rowNav = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
-      .setCustomId(`qm_prev_${safePage}_${safeSelected}`)
+      .setCustomId(`qm_prev_${safePage}_${safeSelected}_${snapshot}`)
       .setLabel("◀ Prev")
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(safePage === 0),
     new ButtonBuilder()
-      .setCustomId(`qm_next_${safePage}_${safeSelected}`)
+      .setCustomId(`qm_next_${safePage}_${safeSelected}_${snapshot}`)
       .setLabel("Next ▶")
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(safePage >= totalPages - 1),

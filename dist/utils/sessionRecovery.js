@@ -154,7 +154,8 @@ export async function restoreSessions(client) {
                     });
                 }
                 player.setData("autoplay", session.autoplay);
-                player.setData("normalized", session.normalized);
+                // Filters are not restored with this session; do not advertise inactive normalization.
+                player.setData("normalized", false);
                 if (session.repeatMode) {
                     await player.setRepeatMode(session.repeatMode).catch(() => { });
                 }

@@ -23,6 +23,10 @@ export function authorConfidence(author = '') {
         return 2;
     return 0;
 }
+/** Conservative radio policy; channel names are hints, not verified ownership. */
+export function isPreferredRadioUpload(track) {
+    return !track.isStream && authorConfidence(track.author) >= 2 && !hasUnrequestedVersion(track.title);
+}
 export function sameRecording(candidate, target) {
     if (candidate.isStream || !sameTitle(candidate.title, target.title) || hasUnrequestedVersion(candidate.title, target.title))
         return false;

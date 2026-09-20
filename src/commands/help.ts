@@ -28,8 +28,8 @@ export const helpCommand = {
           value:
             "`/play <query>` — Play any song, album, or playlist (Spotify / Apple Music / YT / JioSaavn)\n" +
             "`/jiosaavn <query>` (or `/jio`) — Stream directly from JioSaavn with the available catalog bitrate\n" +
-            "`/pause` — Pause current audio stream (smooth fade-out)\n" +
-            "`/resume` — Resume playback (smooth fade-in)\n" +
+            "`/pause` — Pause current audio stream\n" +
+            "`/resume` — Resume playback\n" +
             "`/skip` — Skip to next song\n" +
             "`/remove <position>` — Remove a specific song from the queue by its number\n" +
             "`/clear` — Clear all upcoming songs from the queue\n" +

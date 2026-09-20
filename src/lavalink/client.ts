@@ -1,6 +1,7 @@
 import { resolveRecoveryTrack } from "../services/recovery.js";
 import { confirmedTrack, RecentFailures, withTimeout } from "../utils/playback.js";
-import { authorConfidence, hasUnrequestedVersion, sameRecording, rankSearchTracks } from "../utils/trackSelection.js";
+import { authorConfidence, hasUnrequestedVersion, sameRecording, rankSearchTracks, isPreferredRadioUpload } from "../utils/trackSelection.js";
+import { isLoopbackHost, nodeErrorSummary } from "../utils/nodeDiagnostics.js";
 import {
   ButtonInteraction,
   ChatInputCommandInteraction,
@@ -234,6 +235,7 @@ async function discoverAutoplayRecommendation(player: Player, seedTrack: Track):
         if (radioRes?.tracks?.length && radioRes.loadType !== "error" && radioRes.loadType !== "empty") {
           const validCandidates = radioRes.tracks.filter(
             (t: any) =>
+              isPreferredRadioUpload(t.info) &&
               !historyIds.has(t.info.identifier) &&
               !restrictedTrackIds.has(t.info.identifier) &&
               !isSameSongOrJunk(t.info.title, [...player.queue.previous, ...(player.queue.current ? [player.queue.current] : [])]) &&
@@ -297,6 +299,7 @@ async function discoverAutoplayRecommendation(player: Player, seedTrack: Track):
           if (recRes?.tracks?.length && recRes.loadType !== "empty" && recRes.loadType !== "error") {
             const candidate = [...recRes.tracks].sort((a: any, b: any) => authorConfidence(b.info.author) - authorConfidence(a.info.author)).find(
               (t: any) =>
+                isPreferredRadioUpload(t.info) &&
                 !historyIds.has(t.info.identifier) &&
                 !restrictedTrackIds.has(t.info.identifier) &&
                 !isSameSongOrJunk(t.info.title, [...player.queue.previous, ...(player.queue.current ? [player.queue.current] : [])]) &&
@@ -357,7 +360,7 @@ async function discoverAutoplayRecommendation(player: Player, seedTrack: Track):
       }, seedTrack.requester).catch(() => null);
 
       const masters = rankSearchTracks<any>(hqRes?.tracks || [], parsedCandidate.songTitle)
-        .filter(t => !restrictedTrackIds.has(t.info.identifier) && sameRecording(t.info, foundCandidate!.info));
+        .filter(t => isPreferredRadioUpload(t.info) && !restrictedTrackIds.has(t.info.identifier) && sameRecording(t.info, foundCandidate!.info));
       const candidateMaster = masters[0];
       if (candidateMaster && authorConfidence(candidateMaster.info.author) >= authorConfidence(foundCandidate.info.author)) {
         studioMasterTrack = candidateMaster;
@@ -435,7 +438,7 @@ export function purgeAutoplayTracks(player: Player): void {
 export function getMasterNodeConfigs(): LavalinkNodeOptions[] {
   const configs: LavalinkNodeOptions[] = [];
   if (
-    process.env.LAVALINK_HOST
+    config.lavalink.customEnabled && process.env.LAVALINK_HOST
   ) {
     configs.push({
       authorization: config.lavalink.password,
@@ -539,6 +542,10 @@ export async function ensureNodesHealthy(): Promise<void> {
 }
 
 export function initLavalink(client: Client) {
+  if (config.lavalink.customEnabled && process.env.LAVALINK_HOST && isLoopbackHost(config.lavalink.host)) {
+    console.warn('[Lavalink] Custom node uses loopback: Lavalink must run in the same container as this bot. For a separate Pterodactyl server use its reachable allocation; for public nodes only set LAVALINK_CUSTOM_ENABLED=false.');
+  }
+  if (!getMasterNodeConfigs().length) throw new Error('No Lavalink nodes configured: enable a custom node or public fallbacks.');
   discordClient = client;
   lavalink = new LavalinkManager({
     nodes: getMasterNodeConfigs(),
@@ -573,11 +580,14 @@ export function initLavalink(client: Client) {
   });
 
   lavalink.nodeManager.on("disconnect", (node, reason) => {
-    console.warn(`[Lavalink] Disconnected from audio node "${node.id}": ${reason?.reason || "Unknown reason"}`);
+    const detail = reason?.code === 1006
+      ? 'Abnormal WebSocket closure (1006); check the preceding transport error and server logs. This code does not prove a ping timeout.'
+      : `WebSocket closed (code ${reason?.code ?? 'unknown'}).`;
+    console.warn(`[Lavalink] Disconnected from audio node "${node.id}": ${detail}`);
   });
 
   lavalink.nodeManager.on("error", (node, error) => {
-    console.error(`[Lavalink] Node "${node.id}" encountered an error:`, error.message);
+    console.error(`[Lavalink] Node "${node.id}" encountered an error: ${nodeErrorSummary(error)}`);
   });
 
   // Self-Healing: if a node gets destroyed due to reconnection failure, auto-revive it
@@ -1006,7 +1016,7 @@ export function initLavalink(client: Client) {
 }
 
 export function getBestNode(): string | undefined {
-  if (process.env.LAVALINK_HOST) {
+  if (config.lavalink.customEnabled && process.env.LAVALINK_HOST) {
     const custom = lavalink.nodeManager.nodes.get("Primary-CustomNode");
     if (custom?.connected && isNodeHealthy("Primary-CustomNode")) return "Primary-CustomNode";
   }
@@ -1326,40 +1336,11 @@ export async function validateVoiceGate(
   return { allowed: true };
 }
 
-/**
- * Smooth Volume Fade Out before pausing to avoid speaker popping
- */
+/** Pause/resume without temporary volume writes racing with user volume changes. */
 export async function smoothFadePause(player: Player): Promise<void> {
-  const originalVolume = player.volume;
-  player.setData("pre_pause_volume", originalVolume);
-  try {
-    if (originalVolume > 15) {
-      await player.setVolume(Math.round(originalVolume * 0.5)).catch(() => {});
-      await new Promise((r) => setTimeout(r, 60));
-      await player.setVolume(Math.round(originalVolume * 0.15)).catch(() => {});
-      await new Promise((r) => setTimeout(r, 60));
-    }
-  } catch {}
   await player.pause();
-  await player.setVolume(originalVolume).catch(() => {});
 }
 
-/**
- * Smooth Volume Fade In upon resuming to provide an audiophile ramp-up
- */
 export async function smoothFadeResume(player: Player): Promise<void> {
-  const targetVolume = (player.getData("pre_pause_volume") as number) || player.volume || 100;
-  try {
-    await player.setVolume(Math.max(5, Math.round(targetVolume * 0.15))).catch(() => {});
-  } catch {}
   await player.resume();
-  try {
-    await new Promise((r) => setTimeout(r, 60));
-    await player.setVolume(Math.max(10, Math.round(targetVolume * 0.55))).catch(() => {});
-    await new Promise((r) => setTimeout(r, 60));
-    await player.setVolume(targetVolume).catch(() => {});
-  } catch {}
 }
-
-
-
