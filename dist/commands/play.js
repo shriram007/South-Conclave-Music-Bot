@@ -59,8 +59,10 @@ async function resolveAppleMusicTrack(url) {
 export async function resolveTrackQuery(rawQuery) {
     let trimmed = rawQuery.trim();
     const videoId = youtubeVideoId(trimmed);
-    if (videoId)
-        trimmed = `https://www.youtube.com/watch?v=${videoId}`;
+    if (videoId) {
+        const isMusic = /music\.youtube\.com/i.test(trimmed);
+        trimmed = isMusic ? `https://music.youtube.com/watch?v=${videoId}` : `https://www.youtube.com/watch?v=${videoId}`;
+    }
     // If Spotify track link: resolve track title & artist for 100% stable YouTube Music HQ audio stream
     if (/^https?:\/\/open\.spotify\.com\/track\//i.test(trimmed)) {
         const resolved = await resolveSpotifyTrack(trimmed);
@@ -89,12 +91,19 @@ export async function smartSearch(player, query, isUrl, user) {
     if (isUrl) {
         const exactVideoId = youtubeVideoId(query);
         if (exactVideoId) {
+            const isMusic = /music\.youtube\.com/i.test(query);
+            const searchTarget = isMusic ? `https://music.youtube.com/watch?v=${exactVideoId}` : `https://www.youtube.com/watch?v=${exactVideoId}`;
+            const fallbackTarget = isMusic ? `https://www.youtube.com/watch?v=${exactVideoId}` : `https://music.youtube.com/watch?v=${exactVideoId}`;
             const nodes = [player.node, ...lavalink.nodeManager.nodes.values()]
                 .filter((n, i, all) => n?.connected && all.findIndex(x => x?.id === n.id) === i);
             for (const node of nodes) {
                 try {
-                    const res = await node.search({ query: `https://www.youtube.com/watch?v=${exactVideoId}` }, user);
-                    const exact = res?.tracks?.find((t) => t.info.identifier === exactVideoId && /youtube/i.test(t.info.sourceName));
+                    let res = await node.search({ query: searchTarget }, user);
+                    let exact = res?.tracks?.find((t) => t.info.identifier === exactVideoId && /youtube/i.test(t.info.sourceName));
+                    if (!exact) {
+                        res = await node.search({ query: fallbackTarget }, user);
+                        exact = res?.tracks?.find((t) => t.info.identifier === exactVideoId && /youtube/i.test(t.info.sourceName));
+                    }
                     if (!exact)
                         continue;
                     exact.userData = { ...exact.userData, requestedVideoId: exactVideoId, requestedUri: query };

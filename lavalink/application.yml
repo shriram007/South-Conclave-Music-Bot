@@ -56,9 +56,17 @@ plugins:
     allowDirectVideoIds: true
     allowDirectPlaylistIds: true
     clients:
-      - MUSIC                    # YouTube Music search only
-      - WEB
+      - MUSIC
       - ANDROID_VR
+      - WEB
+      - WEBEMBEDDED
+      - TVHTML5_SIMPLY
+    oauth:
+      enabled: true
+      refreshToken: "${YOUTUBE_REFRESH_TOKEN:}"
+      skipInitialization: true
+    remoteCipher:
+      url: "https://cipher.kikkia.dev/"
 
   lavasrc:
     providers:
