@@ -4,7 +4,7 @@ import { youtubeVideoId, parseSeek, seekToken, canSeek, confirmedTrack } from '.
 import { rankJioSaavnRecommendations, loadJioSaavnAsLavalinkTrack, findJioSaavnAutoplay } from '../dist/services/jiosaavn.js';
 import { buildPlayerMessage } from '../dist/lavalink/playerUI.js';
 import { resolveRecoveryTrack } from '../dist/services/recovery.js';
-import { resolveTrackQuery, smartSearch } from '../dist/commands/play.js';
+import { playCommand, resolveTrackQuery, smartSearch } from '../dist/commands/play.js';
 import { initLavalink } from '../dist/lavalink/client.js';
 import CryptoJS from 'crypto-js';
 
@@ -18,6 +18,19 @@ test('YouTube link forms resolve one exact ID, including watch links with playli
   }
   assert.equal(youtubeVideoId('https://youtube.com.evil.test/watch?v=29WzIwFvVdg'), null);
   assert.equal(youtubeVideoId('https://youtube.com/playlist?list=PLabc'), null);
+});
+
+test('/play URL autocomplete offers the exact canonical YouTube Music video', async () => {
+  let choices;
+  await playCommand.autocomplete({
+    options: { getFocused: () => 'https://music.youtube.com/watch?v=29WzIwFvVdg&si=tracking' },
+    user: { id: 'test-user', username: 'Tester' },
+    respond: async value => { choices = value; },
+  });
+  assert.deepEqual(choices, [{
+    name: '🔗 Play this exact YouTube video',
+    value: 'https://www.youtube.com/watch?v=29WzIwFvVdg',
+  }]);
 });
 
 test('direct-link search rejects the wrong video even if its title says Anthaathi', async t => {
@@ -35,6 +48,18 @@ test('direct-link search rejects the wrong video even if its title says Anthaath
   assert.equal(exact.userData.requestedVideoId, '29WzIwFvVdg');
   manager.nodeManager.nodes.clear();
   assert.equal(await smartSearch({ node: first }, 'https://youtu.be/29WzIwFvVdg', true, {}), null);
+});
+
+test('exact YouTube link reports node rate limiting as playback failure, not no results', async t => {
+  const timer = t.mock.method(globalThis, 'setInterval', () => ({ unref() {} }));
+  const manager = initLavalink({ guilds: { cache: new Map() }, channels: { cache: new Map() } });
+  timer.mock.restore();
+  manager.nodeManager.nodes.clear();
+  const node = { id: 'limited', connected: true, search: async () => { throw new Error('Status code 429'); } };
+  const result = await smartSearch({ node }, 'https://www.youtube.com/watch?v=29WzIwFvVdg', true, {});
+  assert.equal(result.loadType, 'error');
+  assert.match(result.exception.message, /recognized.*could not be loaded/i);
+  assert.match(result.exception.message, /429/);
 });
 
 test('card identity comes from the node payload when encoded audio differs', () => {

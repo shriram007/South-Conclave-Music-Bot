@@ -67,8 +67,9 @@ export async function resolveTrackQuery(rawQuery: string): Promise<{ query: stri
 
   const videoId = youtubeVideoId(trimmed);
   if (videoId) {
-    const isMusic = /music\.youtube\.com/i.test(trimmed);
-    trimmed = isMusic ? `https://music.youtube.com/watch?v=${videoId}` : `https://www.youtube.com/watch?v=${videoId}`;
+    // Both hosts identify the same recording. This form works consistently
+    // with youtube-source playback clients, including the OAuth TV client.
+    trimmed = `https://www.youtube.com/watch?v=${videoId}`;
   }
 
   // If Spotify track link: resolve track title & artist for 100% stable YouTube Music HQ audio stream
@@ -112,6 +113,7 @@ export async function smartSearch(
       const fallbackTarget = isMusic ? `https://www.youtube.com/watch?v=${exactVideoId}` : `https://music.youtube.com/watch?v=${exactVideoId}`;
       const nodes = [player.node, ...lavalink.nodeManager.nodes.values()]
         .filter((n, i, all) => n?.connected && all.findIndex(x => x?.id === n.id) === i);
+      let lastError = "";
       for (const node of nodes) {
         try {
           let res = await node.search({ query: searchTarget }, user);
@@ -123,7 +125,24 @@ export async function smartSearch(
           if (!exact) continue;
           exact.userData = { ...exact.userData, requestedVideoId: exactVideoId, requestedUri: query };
           return { ...res, loadType: "track", tracks: [exact] };
-        } catch { /* Try the same video on the next node, never a title search. */ }
+        } catch (error: any) {
+          lastError = error?.message || String(error);
+          // Try the same video on the next node, never a title search.
+        }
+      }
+      if (/\b429\b|too many requests|rate.?limit/i.test(lastError)) {
+        return {
+          loadType: "error",
+          tracks: [],
+          exception: { message: "YouTube rate-limited this Lavalink server (HTTP 429). The exact video was recognized but could not be loaded." },
+        };
+      }
+      if (/sign.?in|login|not a bot/i.test(lastError)) {
+        return {
+          loadType: "error",
+          tracks: [],
+          exception: { message: "YouTube rejected the Lavalink playback client or login. The exact video was recognized but could not be loaded." },
+        };
       }
       return null;
     }
@@ -408,6 +427,11 @@ export const playCommand = {
 
     // Direct URLs don't need autocomplete
     if (/^https?:\/\//i.test(trimmed)) {
+      const videoId = youtubeVideoId(trimmed);
+      if (videoId) {
+        const value = `https://www.youtube.com/watch?v=${videoId}`;
+        return interaction.respond([{ name: "🔗 Play this exact YouTube video", value }]).catch(() => {});
+      }
       return interaction.respond([]).catch(() => {});
     }
 
@@ -655,6 +679,12 @@ export const playCommand = {
         } catch (e) {
           console.warn("[Spotify Fallback Error]:", e);
         }
+      }
+
+      if (res?.loadType === "error" && res?.exception?.message) {
+        await interaction.editReply(`❌ ${res.exception.message}`);
+        autoDeleteReply(interaction, 12000);
+        return;
       }
 
       if (!res || !res.tracks || res.tracks.length === 0 || res.loadType === "empty") {

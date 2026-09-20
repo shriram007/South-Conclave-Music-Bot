@@ -25,7 +25,7 @@ test('empty aggregate transport errors expose nested codes without leaking reque
   assert.match(nodeErrorSummary(new Error('')), /without a transport code/);
 });
 
-test('public-only node configuration does not reconnect to a disabled custom endpoint', async () => {
+test('disabled custom endpoint is not added when no public nodes are configured', async () => {
   const { config } = await import('../dist/config.js');
   const { getMasterNodeConfigs } = await import('../dist/lavalink/client.js');
   const before = { ...config.lavalink };
@@ -33,7 +33,7 @@ test('public-only node configuration does not reconnect to a disabled custom end
     config.lavalink.customEnabled = false;
     config.lavalink.publicFallbacks = true;
     const nodes = getMasterNodeConfigs();
-    assert.ok(nodes.length > 0);
+    assert.equal(nodes.length, 0);
     assert.equal(nodes.some(n => n.id === 'Primary-CustomNode'), false);
     config.lavalink.publicFallbacks = false;
     assert.equal(getMasterNodeConfigs().length, 0);

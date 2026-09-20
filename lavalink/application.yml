@@ -1,41 +1,41 @@
 server:
-  port: 2333
+  port: ${LAVALINK_PORT:25594}
   address: 0.0.0.0
   http2:
-    enabled: true
+    enabled: false
 
 lavalink:
   plugins:
-    # LavaSrc Plugin for Spotify and Apple Music
-    - dependency: "com.github.topi314.lavasrc:lavasrc-plugin:4.4.1"
-      repository: "https://maven.lavalink.dev/releases"
-    # YouTube source plugin; search does not guarantee a particular stream bitrate
     - dependency: "dev.lavalink.youtube:youtube-plugin:1.18.2"
       repository: "https://maven.lavalink.dev/releases"
-    # JioSaavn Plugin (Pristine 320 kbps Indian & Global audio streaming)
-    - dependency: "com.github.bongo-devs:jiosaavn-plugin:0.1.7"
-      repository: "https://jitpack.io"
+      snapshot: false
 
   server:
-    password: "youshallnotpass"
+    # Define this in the Lavalink Pterodactyl environment and use the identical
+    # LAVALINK_PASSWORD in the Discord bot environment.
+    password: "${LAVALINK_PASSWORD}"
+
     sources:
-      youtube: false # handled by youtube-plugin
+      youtube: false
       bandcamp: true
       soundcloud: true
       twitch: true
       vimeo: true
+      nico: true
       http: true
       local: false
 
-    # Audio pipeline for this node only; Discord channel settings limit output
     bufferDurationMs: 400
     frameBufferDurationMs: 5000
-    opusEncodingQuality: 10      # Max Opus quality (0-10, 10 is highest fidelity)
-    resamplingQuality: HIGH       # Highest quality sample rate converter to 48kHz
+    opusEncodingQuality: 10
+    resamplingQuality: HIGH
     trackStuckThresholdMs: 10000
     useSeekGhosting: true
     youtubePlaylistLoadLimit: 100
     playerUpdateInterval: 5
+    gc-warnings: true
+    soundcloudSearchEnabled: true
+    soundcloudFilterOutPreviewTracks: false
 
     filters:
       volume: true
@@ -55,53 +55,30 @@ plugins:
     allowSearch: true
     allowDirectVideoIds: true
     allowDirectPlaylistIds: true
+
+    # MUSIC handles ytmsearch. TV is the OAuth playback client. WEB clients
+    # provide anonymous fallback for videos that do not require authentication.
     clients:
-      - WEB_REMIX
-      - ANDROID_MUSIC
-      - TVHTML5
-      - ANDROID_VR
+      - MUSIC
+      - TV
       - WEB
+      - WEBEMBEDDED
+
     clientOptions:
-      WEB_REMIX:
-        playback: true
-      ANDROID_MUSIC:
-        playback: true
+      MUSIC:
+        playback: false
+      TV:
+        searching: false
+        playlistLoading: false
+
     oauth:
       enabled: true
+      # Store a new disposable-account token in the Lavalink server environment.
+      # A valid refresh token skips initialization automatically.
       refreshToken: "${YOUTUBE_REFRESH_TOKEN:}"
-      skipInitialization: true
+
     remoteCipher:
       url: "https://cipher.kikkia.dev/"
-
-  lavasrc:
-    providers:
-      # Provider fallback order: YouTube Music ISRC and title search, then YouTube
-      - "ytmsearch:\"%ISRC%\""
-      - "ytmsearch:%QUERY%"
-      - "ytsearch:\"%ISRC%\""
-      - "ytsearch:%QUERY%"
-    sources:
-      spotify: true
-      applemusic: true
-      deezer: false              # Disabled as Deezer is unavailable in India
-      yandexmusic: false
-      flowerytts: false
-      youtube: true
-
-    # Spotify API (Used to resolve Spotify tracks, playlists, and albums)
-    spotify:
-      clientId: "${SPOTIFY_CLIENT_ID:}"
-      clientSecret: "${SPOTIFY_CLIENT_SECRET:}"
-      countryCode: "IN"          # India region for Spotify
-      playlistLoadLimit: 100
-      albumLoadLimit: 50
-
-    # Apple Music (Used to resolve Apple Music songs, playlists, and albums)
-    applemusic:
-      countryCode: "IN"          # India region for Apple Music
-      mediaAPIToken: ""
-      playlistLoadLimit: 100
-      albumLoadLimit: 50
 
 logging:
   file:
@@ -109,3 +86,11 @@ logging:
   level:
     root: INFO
     lavalink: INFO
+    dev.lavalink.youtube.http.YoutubeOauth2Handler: INFO
+  request:
+    # Payloads include Discord voice-session material; never log them.
+    enabled: false
+    includeClientInfo: false
+    includeHeaders: false
+    includePayload: false
+    includeQueryString: false
