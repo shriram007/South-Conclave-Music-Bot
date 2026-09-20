@@ -36,6 +36,26 @@ async function resolveSpotifyTrack(url) {
     }
     return null;
 }
+async function resolveAppleMusicTrack(url) {
+    try {
+        const cleanUrl = url.split("?")[0];
+        const oembedResp = await fetch(`https://music.apple.com/oembed?url=${encodeURIComponent(cleanUrl)}`, {
+            headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" },
+            signal: AbortSignal.timeout(4000),
+        });
+        if (oembedResp.ok) {
+            const data = (await oembedResp.json());
+            if (data.title) {
+                console.log(`[Apple Music Resolver] Resolved "${cleanUrl}" -> "${data.title} ${data.author_name || ""}"`);
+                return `${data.title} ${data.author_name || ""}`.trim();
+            }
+        }
+    }
+    catch (e) {
+        console.warn("[Apple Music Resolver] Error:", e);
+    }
+    return null;
+}
 export async function resolveTrackQuery(rawQuery) {
     let trimmed = rawQuery.trim();
     const videoId = youtubeVideoId(trimmed);
@@ -44,6 +64,13 @@ export async function resolveTrackQuery(rawQuery) {
     // If Spotify track link: resolve track title & artist for 100% stable YouTube Music HQ audio stream
     if (/^https?:\/\/open\.spotify\.com\/track\//i.test(trimmed)) {
         const resolved = await resolveSpotifyTrack(trimmed);
+        if (resolved) {
+            return { query: resolved, isUrl: false };
+        }
+    }
+    // If Apple Music track link: resolve track title & artist for stable streaming
+    if (/^https?:\/\/music\.apple\.com\//i.test(trimmed)) {
+        const resolved = await resolveAppleMusicTrack(trimmed);
         if (resolved) {
             return { query: resolved, isUrl: false };
         }
