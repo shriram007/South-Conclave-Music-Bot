@@ -70,6 +70,19 @@ test('card identity comes from the node payload when encoded audio differs', () 
   assert.equal(confirmedTrack(manager, queued, { track: queued }), queued);
 });
 
+test('verified Jio CDN playback keeps catalog metadata when Lavalink reports Unknown title', () => {
+  const streamUri = 'https://aac.saavncdn.com/song_320.mp4';
+  const queued = { encoded: 'catalog', info: { ...info('Anthaathi'), author: 'Govind Vasantha', uri: 'https://www.jiosaavn.com/song/anthaathi/id', artworkUrl: 'cover' }, userData: { isJioSaavn: true, jioId: 'id', streamUri, language: 'tamil' }, requester: { id: 'user' } };
+  const payloadTrack = { encoded: 'node', info: { ...info('Unknown title', streamUri), identifier: streamUri, uri: streamUri, author: 'Unknown artist', sourceName: 'http' }, userData: {} };
+  const manager = { utils: { buildTrack: payload => ({ ...payload, info: { ...payload.info }, userData: { ...payload.userData } }) } };
+  const actual = confirmedTrack(manager, queued, { track: payloadTrack });
+  assert.equal(actual.encoded, 'node');
+  assert.equal(actual.info.title, 'Anthaathi');
+  assert.equal(actual.info.author, 'Govind Vasantha');
+  assert.equal(actual.info.sourceName, 'http');
+  assert.equal(actual.userData.language, 'tamil');
+});
+
 test('seek input rejects malformed/non-finite input and clamps within the song', () => {
   for (const invalid of ['Infinity', '90oops', '1:99', '1:2:3:4', ':30', '', '+NaN', '1.5']) assert.equal(parseSeek(invalid, 30000, 240000), null, invalid);
   assert.equal(parseSeek('1:30', 0, 240000), 90000);
@@ -159,6 +172,22 @@ test('Jio autoplay uses actual catalog language and 320 availability through the
   assert.equal(result.has320kbps, true);
 });
 
+test('Jio autoplay uses native recommendations, keeps language, and avoids the recent artist', async t => {
+  const encrypted = CryptoJS.DES.encrypt('https://example.com/audio_160.mp4', CryptoJS.enc.Utf8.parse('38346591'), { mode: CryptoJS.mode.ECB, padding: CryptoJS.pad.Pkcs7 }).toString();
+  const raw = (title, id, language, artist) => ({ title, id, primary_artists: artist, language, duration: '240', encrypted_media_url: encrypted, '320kbps': true });
+  t.mock.method(globalThis, 'fetch', async url => {
+    assert.match(String(url), /reco\.getreco/);
+    return new Response(JSON.stringify([
+      raw('Wrong Language', 'hindi', 'hindi', 'New Artist'),
+      raw('Same Singer Again', 'same', 'tamil', 'Seed Artist'),
+      raw('Relevant New Voice', 'fresh', 'tamil', 'Fresh Artist'),
+    ]));
+  });
+  const result = await findJioSaavnAutoplay('Seed Song', 'Seed Artist', 'tamil', new Set(['seed']), [], 'seed', ['Seed Artist']);
+  assert.equal(result.id, 'fresh');
+  assert.equal(result.language, 'tamil');
+});
+
 test('transient stream failures expire instead of hiding songs until restart', async () => {
   const { RecentFailures } = await import('../dist/utils/playback.js');
   let now = 1000;
@@ -204,4 +233,22 @@ test('confirmed wrong video corrects displayed metadata and pauses an explicit-l
   await lavalink.listeners('trackStart')[0](player, current, { track: actual });
   assert.equal(player.queue.current.info.title, 'The Life of Ram');
   assert.equal(pauses, 1);
+});
+
+test('verified Jio recovery from an exact YouTube link is not paused as a mismatched video', async () => {
+  const { lavalink } = await import('../dist/lavalink/client.js');
+  const streamUri = 'https://aac.saavncdn.com/song_320.mp4';
+  const current = {
+    encoded: 'catalog',
+    info: { ...info('Kaarkuzhal Kadavaiye', streamUri), identifier: streamUri, sourceName: 'http', uri: 'https://www.jiosaavn.com/song/kaarkuzhal/id' },
+    userData: { isJioSaavn: true, jioId: 'id', streamUri, language: 'tamil', requestedVideoId: 'iRI6dZHIliY' },
+  };
+  const actual = { encoded: 'node', info: { ...info('Unknown title', streamUri), identifier: streamUri, sourceName: 'http', uri: streamUri, author: 'Unknown artist' }, userData: {} };
+  const data = new Map();
+  let pauses = 0;
+  const player = { guildId: 'jio-recovery', queue: { current }, node: { fetchPlayer: async () => ({ track: actual }) }, getData: k => data.get(k), setData: (k,v) => data.set(k,v), pause: async () => { pauses++; } };
+  await lavalink.listeners('trackStart')[0](player, current, { track: actual });
+  assert.equal(player.queue.current.info.title, 'Kaarkuzhal Kadavaiye');
+  assert.equal(player.queue.current.userData.language, 'tamil');
+  assert.equal(pauses, 0);
 });

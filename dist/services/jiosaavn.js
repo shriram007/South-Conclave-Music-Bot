@@ -197,28 +197,59 @@ export async function resolveJioSaavnTrack(title, artist = "") {
     return null;
 }
 /** Filter before ranking: quality never justifies the wrong language or a repeat. */
-export function rankJioSaavnRecommendations(tracks, seedTitle, seedArtist, language, excludeIds, previousTitles) {
-    return tracks.filter(t => !hasUnrequestedVersion(t.title) && Number.isFinite(t.duration) && t.duration >= 60 && t.duration <= 900 &&
+export function rankJioSaavnRecommendations(tracks, seedTitle, seedArtist, language, excludeIds, previousTitles, previousArtists = [], seedAlbum = "") {
+    const normalized = (value) => value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+    const seedArtistKey = normalized(seedArtist);
+    const recentArtistKeys = previousArtists.map(normalized).filter(Boolean);
+    const seedAlbumKey = normalized(seedAlbum);
+    const valid = tracks.filter(t => !hasUnrequestedVersion(t.title) && Number.isFinite(t.duration) && t.duration >= 60 && t.duration <= 900 &&
         !!t.artist.trim() && !/^(unknown|jiosaavn artist|various artists)$/i.test(t.artist.trim()) &&
         !excludeIds.has(t.id) && !excludeIds.has(t.streamUrl) &&
         (language === "global" || t.language === language) &&
-        ![seedTitle, ...previousTitles].some(title => sameTitle(t.title, title))).sort((a, b) => Number(b.has320kbps) - Number(a.has320kbps) ||
-        Number(!!seedArtist && b.artist.toLowerCase().includes(seedArtist.toLowerCase())) - Number(!!seedArtist && a.artist.toLowerCase().includes(seedArtist.toLowerCase())));
+        ![seedTitle, ...previousTitles].some(title => sameTitle(t.title, title)));
+    const isRecentArtist = (track) => {
+        const artist = normalized(track.artist);
+        return recentArtistKeys.some(recent => artist === recent || (recent.length >= 5 && artist.includes(recent)));
+    };
+    const repeatsSeedArtist = (track) => {
+        const artist = normalized(track.artist);
+        return !!seedArtistKey && (artist === seedArtistKey || (seedArtistKey.length >= 5 && artist.includes(seedArtistKey)));
+    };
+    const repeatsAlbum = (track) => !!seedAlbumKey && normalized(track.album) === seedAlbumKey;
+    return valid.sort((a, b) => Number(isRecentArtist(a)) - Number(isRecentArtist(b)) ||
+        Number(repeatsSeedArtist(a)) - Number(repeatsSeedArtist(b)) ||
+        Number(repeatsAlbum(a)) - Number(repeatsAlbum(b)) ||
+        Number(b.has320kbps) - Number(a.has320kbps));
+}
+/** Native "You Might Like" recommendations preserve JioSaavn's catalog similarity signal. */
+async function getJioSaavnRecommendations(seedId, limit = 20) {
+    if (!seedId)
+        return [];
+    const url = `https://www.jiosaavn.com/api.php?__call=reco.getreco&_format=json&_marker=0&ctx=web6dot0&pid=${encodeURIComponent(seedId)}`;
+    const data = await safeJsonFetch(url, {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+    }, 5000);
+    const raw = Array.isArray(data) ? data : data?.results || data?.songs || data?.list || [];
+    return Array.isArray(raw) ? raw.slice(0, limit).map(parseJioSaavnSong).filter((t) => Boolean(t)) : [];
 }
 /**
  * Generates an autoplay recommendation using JioSaavn's catalog in the exact same language and vibe
  */
-export async function findJioSaavnAutoplay(seedTitle, seedArtist, seedLanguage = "global", excludeIds = new Set(), previousTitles = []) {
+export async function findJioSaavnAutoplay(seedTitle, seedArtist, seedLanguage = "global", excludeIds = new Set(), previousTitles = [], seedId = "", previousArtists = [], seedAlbum = "") {
     try {
+        const nativeRecommendations = await getJioSaavnRecommendations(seedId);
+        const nativeValid = rankJioSaavnRecommendations(nativeRecommendations, seedTitle, seedArtist, seedLanguage, excludeIds, previousTitles, previousArtists, seedAlbum);
+        if (nativeValid.length > 0)
+            return nativeValid[0];
         const language = seedLanguage === "global" ? "" : seedLanguage;
         const queries = [...new Set([
-                seedArtist && `${seedArtist} ${language}`,
-                `${seedTitle} ${language}`,
-                language && `${language} songs`,
+                `${seedTitle} ${seedArtist} ${language}`.trim(),
+                `${seedTitle} ${language}`.trim(),
             ].filter((q) => Boolean(q)))];
         for (const q of queries) {
             const results = await searchJioSaavn(q, 10);
-            const valid = rankJioSaavnRecommendations(results, seedTitle, seedArtist, seedLanguage, excludeIds, previousTitles);
+            const valid = rankJioSaavnRecommendations(results, seedTitle, seedArtist, seedLanguage, excludeIds, previousTitles, previousArtists, seedAlbum);
             if (valid.length > 0) {
                 // Pick randomly from top 3 to keep discovery fresh
                 return valid[0];

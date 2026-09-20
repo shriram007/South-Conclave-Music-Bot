@@ -60,11 +60,15 @@ plugins:
     # TV remains the OAuth fallback, while WEB clients are last-resort fallbacks.
     clients:
       - MUSIC
+      - ANDROID
+      - ANDROID_MUSIC
       - ANDROID_VR
       - TVHTML5_SIMPLY
       - TV
+      - MWEB
       - WEB
       - WEBEMBEDDED
+      - IOS
 
     clientOptions:
       MUSIC:

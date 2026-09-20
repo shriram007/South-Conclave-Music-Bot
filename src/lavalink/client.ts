@@ -185,6 +185,12 @@ async function discoverAutoplayRecommendation(player: Player, seedTrack: Track):
   let foundCandidate: Track | null = null;
 
   const isJioSeed = Boolean((seedTrack.userData as any)?.isJioSaavn) || seedTrack.info.sourceName === "jiosaavn";
+  const seedJioId = String((seedTrack.userData as any)?.jioId || "");
+  const seedAlbum = String((seedTrack.userData as any)?.album || "");
+  const previousArtists = [
+    ...player.queue.previous.map(t => t.info?.author),
+    player.queue.current?.info?.author,
+  ].filter((artist): artist is string => Boolean(artist));
 
   const previousTitles = [
     cleanTitle,
@@ -198,7 +204,7 @@ async function discoverAutoplayRecommendation(player: Player, seedTrack: Track):
   // Strategy 0: If current playing track came from JioSaavn (/jio), keep streaming pristine 320k JioSaavn Studio Radio!
   if (isJioSeed) {
     try {
-      const jioAuto = await findJioSaavnAutoplay(cleanTitle, effectiveArtist, seedLang, historyIds, previousTitles);
+      const jioAuto = await findJioSaavnAutoplay(cleanTitle, effectiveArtist, seedLang, historyIds, previousTitles, seedJioId, previousArtists, seedAlbum);
       if (jioAuto) {
         const allPrev = [...player.queue.previous, ...(player.queue.current ? [player.queue.current] : [])];
         if (isSameSongOrJunk(jioAuto.title, allPrev)) {
@@ -327,7 +333,7 @@ async function discoverAutoplayRecommendation(player: Player, seedTrack: Track):
   // Strategy 3: JioSaavn 320 kbps Autoplay Discovery (unrestricted, authentic 320 kbps studio audio)
   if (!foundCandidate) {
     try {
-      const jioRec = await findJioSaavnAutoplay(cleanTitle, effectiveArtist, seedLang, historyIds, previousTitles);
+      const jioRec = await findJioSaavnAutoplay(cleanTitle, effectiveArtist, seedLang, historyIds, previousTitles, seedJioId, previousArtists, seedAlbum);
       if (jioRec) {
         const allPrev = [...player.queue.previous, ...(player.queue.current ? [player.queue.current] : [])];
         if (!isSameSongOrJunk(jioRec.title, allPrev)) {
@@ -681,7 +687,7 @@ export function initLavalink(client: Client) {
   const trackStartLocks = new Set<string>();
 
   lavalink.on("trackStart", async (player: Player, track: Track | null, payload) => {
-    const requestedVideoId = (track?.userData as any)?.requestedVideoId;
+    const requestedVideoId = (track?.userData as any)?.isJioSaavn ? undefined : (track?.userData as any)?.requestedVideoId;
     const actual = confirmedTrack(lavalink, track, payload);
     if (actual && actual !== track) {
       // An older start event can arrive after a newer play request. Verify the
@@ -977,12 +983,23 @@ export function initLavalink(client: Client) {
 
           recoveredTrack.requester = track.requester;
           if (!recoveryIsCurrent()) return;
-          recoveredTrack.userData = {
+          const recoveredIsJio = Boolean((recoveredTrack.userData as any)?.isJioSaavn);
+          recoveredTrack.userData = recoveredIsJio ? {
+            command: (track.userData as any)?.command,
+            isAutoplay: (track.userData as any)?.isAutoplay,
+            recoveredFromVideoId: (track.userData as any)?.requestedVideoId,
+            recoveredFromUri: (track.userData as any)?.requestedUri,
+            ...recoveredTrack.userData,
+            requestedVideoId: undefined,
+            requestedUri: undefined,
+            recoveryAttempts,
+          } : {
             command: (track.userData as any)?.command,
             isAutoplay: (track.userData as any)?.isAutoplay,
             requestedVideoId: (track.userData as any)?.requestedVideoId,
             requestedUri: (track.userData as any)?.requestedUri,
-            ...recoveredTrack.userData, recoveryAttempts,
+            ...recoveredTrack.userData,
+            recoveryAttempts,
           };
           try {
             const position = recoveredTrack.info.isSeekable !== false && !recoveredTrack.info.isStream

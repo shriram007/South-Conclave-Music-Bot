@@ -166,6 +166,12 @@ async function discoverAutoplayRecommendation(player, seedTrack) {
     }
     let foundCandidate = null;
     const isJioSeed = Boolean(seedTrack.userData?.isJioSaavn) || seedTrack.info.sourceName === "jiosaavn";
+    const seedJioId = String(seedTrack.userData?.jioId || "");
+    const seedAlbum = String(seedTrack.userData?.album || "");
+    const previousArtists = [
+        ...player.queue.previous.map(t => t.info?.author),
+        player.queue.current?.info?.author,
+    ].filter((artist) => Boolean(artist));
     const previousTitles = [
         cleanTitle,
         rawTitle,
@@ -177,7 +183,7 @@ async function discoverAutoplayRecommendation(player, seedTrack) {
     // Strategy 0: If current playing track came from JioSaavn (/jio), keep streaming pristine 320k JioSaavn Studio Radio!
     if (isJioSeed) {
         try {
-            const jioAuto = await findJioSaavnAutoplay(cleanTitle, effectiveArtist, seedLang, historyIds, previousTitles);
+            const jioAuto = await findJioSaavnAutoplay(cleanTitle, effectiveArtist, seedLang, historyIds, previousTitles, seedJioId, previousArtists, seedAlbum);
             if (jioAuto) {
                 const allPrev = [...player.queue.previous, ...(player.queue.current ? [player.queue.current] : [])];
                 if (isSameSongOrJunk(jioAuto.title, allPrev)) {
@@ -287,7 +293,7 @@ async function discoverAutoplayRecommendation(player, seedTrack) {
     // Strategy 3: JioSaavn 320 kbps Autoplay Discovery (unrestricted, authentic 320 kbps studio audio)
     if (!foundCandidate) {
         try {
-            const jioRec = await findJioSaavnAutoplay(cleanTitle, effectiveArtist, seedLang, historyIds, previousTitles);
+            const jioRec = await findJioSaavnAutoplay(cleanTitle, effectiveArtist, seedLang, historyIds, previousTitles, seedJioId, previousArtists, seedAlbum);
             if (jioRec) {
                 const allPrev = [...player.queue.previous, ...(player.queue.current ? [player.queue.current] : [])];
                 if (!isSameSongOrJunk(jioRec.title, allPrev)) {
@@ -624,7 +630,7 @@ export function initLavalink(client) {
     });
     const trackStartLocks = new Set();
     lavalink.on("trackStart", async (player, track, payload) => {
-        const requestedVideoId = track?.userData?.requestedVideoId;
+        const requestedVideoId = track?.userData?.isJioSaavn ? undefined : track?.userData?.requestedVideoId;
         const actual = confirmedTrack(lavalink, track, payload);
         if (actual && actual !== track) {
             // An older start event can arrive after a newer play request. Verify the
@@ -898,12 +904,23 @@ export function initLavalink(client) {
                     recoveredTrack.requester = track.requester;
                     if (!recoveryIsCurrent())
                         return;
-                    recoveredTrack.userData = {
+                    const recoveredIsJio = Boolean(recoveredTrack.userData?.isJioSaavn);
+                    recoveredTrack.userData = recoveredIsJio ? {
+                        command: track.userData?.command,
+                        isAutoplay: track.userData?.isAutoplay,
+                        recoveredFromVideoId: track.userData?.requestedVideoId,
+                        recoveredFromUri: track.userData?.requestedUri,
+                        ...recoveredTrack.userData,
+                        requestedVideoId: undefined,
+                        requestedUri: undefined,
+                        recoveryAttempts,
+                    } : {
                         command: track.userData?.command,
                         isAutoplay: track.userData?.isAutoplay,
                         requestedVideoId: track.userData?.requestedVideoId,
                         requestedUri: track.userData?.requestedUri,
-                        ...recoveredTrack.userData, recoveryAttempts,
+                        ...recoveredTrack.userData,
+                        recoveryAttempts,
                     };
                     try {
                         const position = recoveredTrack.info.isSeekable !== false && !recoveredTrack.info.isStream

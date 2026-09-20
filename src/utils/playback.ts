@@ -43,7 +43,26 @@ export async function withTimeout<T>(work: Promise<T>, ms: number): Promise<T | 
 export function confirmedTrack(manager: any, queued: any, payload: any): any {
   if (!payload?.track?.encoded) return queued;
   if (queued?.encoded === payload.track.encoded) return queued;
-  return manager.utils.buildTrack(payload.track, payload.track.userData?.requester);
+  const actual = manager.utils.buildTrack(payload.track, payload.track.userData?.requester);
+  const queuedData = queued?.userData || {};
+  const streamUri = queuedData.streamUri;
+  const actualIdentifier = actual?.info?.identifier || actual?.info?.uri;
+
+  // Lavalink decodes direct HTTP audio as "Unknown title". For a verified
+  // JioSaavn CDN URL, retain the catalog identity while using the node's actual
+  // encoded track and transport fields.
+  if (queuedData.isJioSaavn && streamUri && actualIdentifier === streamUri) {
+    actual.info = {
+      ...actual.info,
+      title: queued.info.title,
+      author: queued.info.author,
+      artworkUrl: queued.info.artworkUrl,
+      uri: queued.info.uri,
+    };
+    actual.userData = { ...(actual.userData || {}), ...queuedData };
+    actual.requester = queued.requester;
+  }
+  return actual;
 }
 
 /** A temporary provider failure should not blacklist a recording until restart. */
