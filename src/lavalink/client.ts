@@ -154,16 +154,18 @@ async function discoverAutoplayRecommendation(player: Player, seedTrack: Track):
     ? declaredLanguage : detectTrackLanguage(rawTitle, rawAuthor);
   console.log(`[Smart Autoplay] Finding AI radio recommendations based on "${cleanTitle}" by "${effectiveArtist}" (Language: ${seedLang.toUpperCase()})...`);
 
-  const connectedNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n) => n.connected);
-  const healthyNodes = connectedNodes.filter((n) => isNodeHealthy(n.id));
-  const kasawaNode = healthyNodes.find((n) => n.id === "Kasawa-MasterNode");
-  const milloNode = healthyNodes.find((n) => n.id === "Millo-BackupNode");
-  const serenetiaNode = healthyNodes.find((n) => n.id === "Serenetia-AuxNode");
-  const otherHealthy = healthyNodes.filter((n) => n.id !== "Kasawa-MasterNode" && n.id !== "Millo-BackupNode" && n.id !== "Serenetia-AuxNode");
-  const degradedList = connectedNodes.filter((n) => !isNodeHealthy(n.id));
+  const connectedNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n: any) => n.connected);
+  const healthyNodes = connectedNodes.filter((n: any) => isNodeHealthy(n.id));
+  const customNode = healthyNodes.find((n: any) => n.id === "Primary-CustomNode");
+  const kasawaNode = healthyNodes.find((n: any) => n.id === "Kasawa-MasterNode");
+  const milloNode = healthyNodes.find((n: any) => n.id === "Millo-BackupNode");
+  const serenetiaNode = healthyNodes.find((n: any) => n.id === "Serenetia-AuxNode");
+  const otherHealthy = healthyNodes.filter((n: any) => n.id !== "Primary-CustomNode" && n.id !== "Kasawa-MasterNode" && n.id !== "Millo-BackupNode" && n.id !== "Serenetia-AuxNode");
+  const degradedList = connectedNodes.filter((n: any) => !isNodeHealthy(n.id));
 
-  // Priority: Kasawa (supports direct 320k JioSaavn + YT/Spotify) > Millo > Serenetia
+  // Priority: Custom Primary Node > Kasawa > Millo > Serenetia
   const nodesToTry = healthyNodes.length > 0 ? [
+    ...(customNode ? [customNode] : []),
     ...(kasawaNode ? [kasawaNode] : []),
     ...(milloNode ? [milloNode] : []),
     ...(serenetiaNode ? [serenetiaNode] : []),
@@ -456,6 +458,10 @@ export function getMasterNodeConfigs(): LavalinkNodeOptions[] {
 
   if (!config.lavalink.publicFallbacks) return configs;
 
+  // =========================================================================
+  // PUBLIC FALLBACK NODES (Kept for reference / backup - uncomment to re-enable)
+  // =========================================================================
+  /*
   // Priority 1: Kasawa-MasterNode (verified online, supports direct HTTP 320k JioSaavn streaming, YT, Spotify, SoundCloud)
   configs.push(
     {
@@ -495,6 +501,7 @@ export function getMasterNodeConfigs(): LavalinkNodeOptions[] {
       enablePingOnStatsCheck: true,
     }
   );
+  */
 
   return configs;
 }

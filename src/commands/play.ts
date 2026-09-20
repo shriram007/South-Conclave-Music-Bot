@@ -140,11 +140,13 @@ export async function smartSearch(
       } catch {}
     }
 
-    // 2. Try resolving across healthy alternate nodes (Kasawa, Millo, Serenetia)
+    // 2. Try resolving across healthy alternate nodes (Custom Node, Kasawa, Millo, Serenetia)
     const connectedNodes = Array.from(lavalink.nodeManager.nodes.values()).filter((n: any) => n.connected);
     const healthyOthers = connectedNodes.filter((n: any) => n.id !== player.node?.id && isNodeHealthy(n.id));
-    // Prioritize Kasawa (supports direct HTTP + streaming) and Serenetia
+    // Prioritize Custom Primary Node, then Kasawa (direct HTTP + streaming) and Serenetia
     healthyOthers.sort((a: any, b: any) => {
+      if (a.id === "Primary-CustomNode") return -1;
+      if (b.id === "Primary-CustomNode") return 1;
       if (a.id === "Kasawa-MasterNode") return -1;
       if (b.id === "Kasawa-MasterNode") return 1;
       if (a.id === "Serenetia-AuxNode") return -1;
@@ -181,16 +183,18 @@ export async function smartSearch(
     (n: any) => n.connected
   );
   const healthyNodes = connectedNodes.filter((n: any) => isNodeHealthy(n.id));
+  const customNode = healthyNodes.find((n: any) => n.id === "Primary-CustomNode");
   const kasawaNode = healthyNodes.find((n: any) => n.id === "Kasawa-MasterNode");
   const milloNode = healthyNodes.find((n: any) => n.id === "Millo-BackupNode");
   const serenetiaNode = healthyNodes.find((n: any) => n.id === "Serenetia-AuxNode");
-  const otherHealthy = healthyNodes.filter((n: any) => n.id !== "Kasawa-MasterNode" && n.id !== "Millo-BackupNode" && n.id !== "Serenetia-AuxNode");
+  const otherHealthy = healthyNodes.filter((n: any) => n.id !== "Primary-CustomNode" && n.id !== "Kasawa-MasterNode" && n.id !== "Millo-BackupNode" && n.id !== "Serenetia-AuxNode");
   const degradedList = connectedNodes.filter((n: any) => !isNodeHealthy(n.id));
 
-  // Prioritize Kasawa, Millo, Serenetia
+  // Prioritize Custom Node, then Kasawa, Millo, Serenetia
   const playerNodeIfHealthy = (player.node?.connected && isNodeHealthy(player.node.id)) ? [player.node] : [];
   const nodesToTry = healthyNodes.length > 0 ? [
     ...playerNodeIfHealthy,
+    ...(customNode && customNode.id !== player.node?.id ? [customNode] : []),
     ...(kasawaNode && kasawaNode.id !== player.node?.id ? [kasawaNode] : []),
     ...(milloNode && milloNode.id !== player.node?.id ? [milloNode] : []),
     ...(serenetiaNode && serenetiaNode.id !== player.node?.id ? [serenetiaNode] : []),
