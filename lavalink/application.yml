@@ -57,10 +57,15 @@ plugins:
     allowDirectPlaylistIds: true
     clients:
       - MUSIC
+      - ANDROID_MUSIC
+      - TV
       - ANDROID_VR
       - WEB
-      - WEBEMBEDDED
-      - TVHTML5_SIMPLY
+    clientOptions:
+      MUSIC:
+        playback: true
+      ANDROID_MUSIC:
+        playback: true
     oauth:
       enabled: true
       refreshToken: "${YOUTUBE_REFRESH_TOKEN:}"
