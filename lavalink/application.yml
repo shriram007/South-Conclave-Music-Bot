@@ -56,13 +56,13 @@ plugins:
     allowDirectVideoIds: true
     allowDirectPlaylistIds: true
     clients:
-      - MUSIC
+      - WEB_REMIX
       - ANDROID_MUSIC
-      - TV
+      - TVHTML5
       - ANDROID_VR
       - WEB
     clientOptions:
-      MUSIC:
+      WEB_REMIX:
         playback: true
       ANDROID_MUSIC:
         playback: true

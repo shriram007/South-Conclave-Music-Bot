@@ -159,8 +159,13 @@ export function parseTrackTitle(rawTitle: string, rawAuthor: string = ""): Parse
   let songTitle = "";
   let artist = (rawAuthor || "").replace(/- Topic|VEVO$/gi, "").trim();
 
-  // Strip labels/channels from author
+  // Strip labels/channels/generic auto-generated YouTube names from author
   if (/t-series|sony music|zee music|saregama|aditya music|tips official|channel|think music|speed audio|lahari|yt records|speed records|wunderbar films|u1 records|sun pictures/i.test(artist)) {
+    artist = "";
+  }
+  // YouTube auto-generates "Release - Topic", "Various Artists - Topic" etc.
+  // After stripping "- Topic", these become meaningless generic words that poison search queries.
+  if (/^(release|various artists?|unknown artist|compilation|soundtrack|original soundtrack|ost|album)$/i.test(artist)) {
     artist = "";
   }
 

@@ -9,7 +9,7 @@ export function sameTitle(a, b) {
         return false;
     return left === right || (Math.min(left.length, right.length) >= 6 && calculateFuzzySimilarity(left, right) >= 0.86);
 }
-const variants = /\b(cover|karaoke|instrumental|remix|slowed|sped up|nightcore|lofi|lo fi|live|tribute|8d|bass boosted|jukebox|mashup)\b/gi;
+const variants = /\b(cover|karaoke|instrumental|remix|slowed|sped up|nightcore|lofi|lo fi|live|tribute|8d|bass boosted|jukebox|mashup|teaser|trailer|dialogue|dialogues|promo|behind the scenes)\b/gi;
 export function hasUnrequestedVersion(candidate, requested = '') {
     const wanted = new Set(normalizeIdentity(requested).match(variants) || []);
     return (normalizeIdentity(candidate).match(variants) || []).some(tag => !wanted.has(tag));
