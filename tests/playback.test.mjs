@@ -5,7 +5,7 @@ import { rankJioSaavnRecommendations, loadJioSaavnAsLavalinkTrack, findJioSaavnA
 import { buildPlayerMessage } from '../dist/lavalink/playerUI.js';
 import { resolveRecoveryTrack } from '../dist/services/recovery.js';
 import { playCommand, resolveTrackQuery, smartSearch } from '../dist/commands/play.js';
-import { initLavalink } from '../dist/lavalink/client.js';
+import { findAutoplayRecommendation, initLavalink } from '../dist/lavalink/client.js';
 import CryptoJS from 'crypto-js';
 
 const info = (title = 'Anthaathi', identifier = '29WzIwFvVdg') => ({ title, identifier, author: 'Govind Vasantha', duration: 240000, sourceName: 'youtube', isSeekable: true, isStream: false, uri: `https://www.youtube.com/watch?v=${identifier}` });
@@ -151,6 +151,15 @@ test('exact video recovery skips the failed node and cannot switch to another so
   assert.equal((await resolveRecoveryTrack(original, [badNode, goodNode], () => true, 'bad')).track, exact);
 });
 
+test('search result recovery does not retry YouTube on the node that rejected playback', async t => {
+  t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({ results: [] })));
+  let searches = 0;
+  const original = { info: info('Viva La Vida', 'ALsvdSA9tOU'), userData: { searchSource: 'ytmsearch' } };
+  const failedNode = { id: 'blocked', connected: true, search: async () => { searches++; return { tracks: [original] }; } };
+  assert.equal(await resolveRecoveryTrack(original, [failedNode], () => true, 'blocked'), null);
+  assert.equal(searches, 0);
+});
+
 test('recovery result is discarded when a newer playback starts while search is pending', async () => {
   let active = true, release;
   const pending = new Promise(resolve => { release = resolve; });
@@ -186,6 +195,45 @@ test('Jio autoplay uses native recommendations, keeps language, and avoids the r
   const result = await findJioSaavnAutoplay('Seed Song', 'Seed Artist', 'tamil', new Set(['seed']), [], 'seed', ['Seed Artist']);
   assert.equal(result.id, 'fresh');
   assert.equal(result.language, 'tamil');
+});
+
+test('Jio seed uses a YTM related song and upgrades that exact recommendation to Jio audio', async t => {
+  const timer = t.mock.method(globalThis, 'setInterval', () => ({ unref() {} }));
+  const manager = initLavalink({ guilds: { cache: new Map() }, channels: { cache: new Map() } });
+  timer.mock.restore();
+  manager.nodeManager.nodes.clear();
+
+  const encrypted = CryptoJS.DES.encrypt('https://example.com/high_160.mp4', CryptoJS.enc.Utf8.parse('38346591'), { mode: CryptoJS.mode.ECB, padding: CryptoJS.pad.Pkcs7 }).toString();
+  t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({ results: [{
+    id: 'high-jio', song: 'High on Love', primary_artists: 'Sid Sriram - Topic', language: 'tamil',
+    duration: '240', encrypted_media_url: encrypted, '320kbps': true,
+  }] })));
+
+  const seed = {
+    encoded: 'jio-seed',
+    info: { ...info('Anthaathi', 'https://example.com/anthaathi_320.mp4'), author: 'Govind Vasantha', sourceName: 'http', uri: 'https://www.jiosaavn.com/song/anthaathi/seed', duration: 240000 },
+    userData: { isJioSaavn: true, jioId: 'seed', language: 'tamil' }, requester: { id: 'user' },
+  };
+  const ytmSeed = { encoded: 'ytm-seed', info: { ...info('Anthaathi', '29WzIwFvVdg'), author: 'Govind Vasantha - Topic' }, userData: {} };
+  const related = { encoded: 'ytm-related', info: { ...info('High on Love', 'highOnLove1'), author: 'Sid Sriram - Topic' }, userData: {} };
+  const calls = [];
+  const node = { id: 'Primary-CustomNode', connected: true, search: async options => {
+    calls.push(options);
+    if (options.source === 'ytmsearch') return { loadType: 'search', tracks: [ytmSeed] };
+    if (String(options.query).includes('list=RD29WzIwFvVdg')) return { loadType: 'playlist', tracks: [related] };
+    if (options.query === 'https://example.com/high_320.mp4') return { loadType: 'track', tracks: [{ encoded: 'jio-related', info: { identifier: options.query, uri: options.query, sourceName: 'http', duration: 240000, isSeekable: true, isStream: false }, userData: {} }] };
+    return { loadType: 'empty', tracks: [] };
+  } };
+  manager.nodeManager.nodes.set(node.id, node);
+  const player = { guildId: 'ytm-related-jio', node, queue: { current: seed, previous: [], tracks: [] } };
+  manager.players.set(player.guildId, player);
+
+  const result = await findAutoplayRecommendation(player, seed);
+  assert.equal(result.info.title, 'High on Love');
+  assert.equal(result.userData.isJioSaavn, true);
+  assert.equal(result.userData.quality, '320kbps');
+  assert.equal(calls[0].source, 'ytmsearch');
+  assert.match(calls[1].query, /list=RD29WzIwFvVdg/);
 });
 
 test('transient stream failures expire instead of hiding songs until restart', async () => {
@@ -251,4 +299,75 @@ test('verified Jio recovery from an exact YouTube link is not paused as a mismat
   assert.equal(player.queue.current.info.title, 'Kaarkuzhal Kadavaiye');
   assert.equal(player.queue.current.userData.language, 'tamil');
   assert.equal(pauses, 0);
+});
+
+test('playlist load failure recovers through Jio before the displaced next song', async t => {
+  const timer = t.mock.method(globalThis, 'setInterval', () => ({ unref() {} }));
+  const manager = initLavalink({ guilds: { cache: new Map() }, channels: { cache: new Map() } });
+  timer.mock.restore();
+  manager.nodeManager.nodes.clear();
+  assert.equal(manager.options.autoSkip, false);
+
+  const encrypted = CryptoJS.DES.encrypt('https://example.com/recovered_160.mp4', CryptoJS.enc.Utf8.parse('38346591'), { mode: CryptoJS.mode.ECB, padding: CryptoJS.pad.Pkcs7 }).toString();
+  t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({ results: [{ id: 'jio-recovered', song: 'Kadhal Valarthen', primary_artists: 'Artist', language: 'tamil', duration: '240', encrypted_media_url: encrypted, '320kbps': true }] })));
+
+  const failed = { encoded: 'failed', info: { ...info('Kadhal Valarthen', 'failedYt001'), author: 'Artist' }, userData: {}, requester: { id: 'user' } };
+  const next = { encoded: 'next', info: info('Pirai Thedum', 'nextYt00001'), userData: {} };
+  const node = { id: 'current', connected: true, search: async ({ query }) => ({ loadType: 'track', tracks: [{ encoded: 'jio', info: { identifier: query, uri: query, sourceName: 'http', duration: 240000, isSeekable: true, isStream: false }, userData: {} }] }) };
+  manager.nodeManager.nodes.set(node.id, node);
+
+  const data = new Map();
+  const plays = [];
+  const player = {
+    guildId: 'playlist-recovery', node, position: 2000, playing: false, repeatMode: 'off',
+    queue: { current: failed, tracks: [next], previous: [] },
+    getData: key => data.get(key), setData: (key, value) => data.set(key, value),
+    setRepeatMode: async () => {}, changeNode: async target => { player.node = target; },
+    play: async options => { plays.push(options); if (options.clientTrack) player.queue.current = options.clientTrack; player.playing = true; },
+  };
+  manager.players.set(player.guildId, player);
+
+  await manager.listeners('trackError')[0](player, failed, { track: failed, exception: { message: 'All clients failed to load the item' } });
+  player.queue.previous.unshift(failed);
+  player.queue.current = player.queue.tracks.shift();
+  await manager.listeners('trackEnd')[0](player, failed, { reason: 'loadFailed' });
+
+  assert.equal(plays.length, 1);
+  assert.equal(player.queue.current.info.title, 'Kadhal Valarthen');
+  assert.equal(player.queue.current.userData.isJioSaavn, true);
+  assert.equal(player.queue.tracks[0], next);
+});
+
+test('playlist load failure advances once when no valid Jio replacement exists', async t => {
+  const timer = t.mock.method(globalThis, 'setInterval', () => ({ unref() {} }));
+  const manager = initLavalink({ guilds: { cache: new Map() }, channels: { cache: new Map() } });
+  timer.mock.restore();
+  manager.nodeManager.nodes.clear();
+  t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({ results: [] })));
+
+  const failed = { encoded: 'failed-none', info: { ...info('Missing Song', 'missingYt001'), author: 'Original Artist' }, userData: {} };
+  const next = { encoded: 'next-once', info: info('Next Song', 'nextYt00002'), userData: {} };
+  const node = { id: 'current-none', connected: true, search: async () => ({ loadType: 'empty', tracks: [] }) };
+  manager.nodeManager.nodes.set(node.id, node);
+
+  const data = new Map();
+  const plays = [];
+  const player = {
+    guildId: 'playlist-no-recovery', node, position: 1000, playing: false, repeatMode: 'off',
+    queue: { current: failed, tracks: [next], previous: [] },
+    getData: key => data.get(key), setData: (key, value) => data.set(key, value),
+    setRepeatMode: async () => {}, changeNode: async target => { player.node = target; },
+    play: async options => { plays.push(options); player.playing = true; },
+  };
+  manager.players.set(player.guildId, player);
+
+  await manager.listeners('trackError')[0](player, failed, { track: failed, exception: { message: 'All clients failed to load the item' } });
+  player.queue.previous.unshift(failed);
+  player.queue.current = player.queue.tracks.shift();
+  await manager.listeners('trackEnd')[0](player, failed, { reason: 'loadFailed' });
+
+  assert.equal(plays.length, 1);
+  assert.equal(plays[0].noReplace, true);
+  assert.equal(player.queue.current, next);
+  assert.equal(player.queue.tracks.length, 0);
 });

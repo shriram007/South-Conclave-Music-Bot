@@ -12,6 +12,9 @@ export async function resolveRecoveryTrack(
 ): Promise<{ track: any; node: any } | null> {
   const deadline = Date.now() + 14000;
   const nodes = candidateNodes.filter((n, i, all) => n?.connected && all.findIndex(x => x?.id === n.id) === i).slice(0, 3);
+  // A node that already failed every YouTube playback client must not receive
+  // the same recording again. Keep it available for HTTP/JioSaavn loading.
+  const youtubeNodes = failedNodeId ? nodes.filter(node => node.id !== failedNodeId) : nodes;
   const active = () => isCurrent() && Date.now() < deadline;
   const search = async (node: any, query: string, source?: string): Promise<any[]> => {
     if (!active()) return [];
@@ -64,7 +67,7 @@ export async function resolveRecoveryTrack(
   if (exactId || !active()) return null;
   const parsed = parseTrackTitle(original.info.title, original.info.author);
   if (!original.userData?.isJioSaavn) {
-    const results = await Promise.all(nodes.map(async node => {
+    const results = await Promise.all(youtubeNodes.map(async node => {
       const tracks = await search(node, parsed.fullSearchQuery, 'ytmsearch');
       const track = rankSearchTracks<any>(tracks, parsed.songTitle).find(t => sameRecording(t.info, original.info));
       if (track) track.userData = { ...track.userData, searchSource: 'ytmsearch' };
@@ -76,7 +79,7 @@ export async function resolveRecoveryTrack(
   if (!active()) return null;
   if (!active() || original.userData?.isJioSaavn) return null;
   // Last resort: a recognized original upload, never an arbitrary SoundCloud cover.
-  const results = await Promise.all(nodes.map(async node => {
+  const results = await Promise.all(youtubeNodes.map(async node => {
     const tracks = await search(node, parsed.fullSearchQuery, 'ytsearch');
     const track = rankSearchTracks<any>(tracks, parsed.songTitle).find(t => authorConfidence(t.info.author) >= 2 && sameRecording(t.info, original.info));
     return track ? { track, node } : null;

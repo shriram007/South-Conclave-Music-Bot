@@ -201,40 +201,31 @@ async function discoverAutoplayRecommendation(player: Player, seedTrack: Track):
     ...player.queue.tracks.map((t) => t.info?.title).filter(Boolean),
   ];
 
-  // Strategy 0: If current playing track came from JioSaavn (/jio), keep streaming pristine 320k JioSaavn Studio Radio!
-  if (isJioSeed) {
-    try {
-      const jioAuto = await findJioSaavnAutoplay(cleanTitle, effectiveArtist, seedLang, historyIds, previousTitles, seedJioId, previousArtists, seedAlbum);
-      if (jioAuto) {
-        const allPrev = [...player.queue.previous, ...(player.queue.current ? [player.queue.current] : [])];
-        if (isSameSongOrJunk(jioAuto.title, allPrev)) {
-          console.log(`[Smart Autoplay] Discarded JioSaavn duplicate of previous track: "${jioAuto.title}"`);
-        } else {
-          const candidateNodes = [
-            player.node,
-            ...(kasawaNode ? [kasawaNode] : []),
-            ...nodesToTry,
-          ];
-          const converted = await loadJioSaavnAsLavalinkTrack(jioAuto, { displayName: "📻 Autoplay Radio" }, candidateNodes);
-          if (converted) {
-            console.log(`[Smart Autoplay] Found regional JioSaavn recommendation (${seedLang}): "${converted.track.info.title}" by "${converted.track.info.author}"`);
-            converted.track.requester = { displayName: "📻 Autoplay Radio" } as any;
-            (converted.track as any).userData = { ...(converted.track.userData || {}), command: "Autoplay", isAutoplay: true };
-            return converted.track;
-          }
+  // Resolve every seed into the YouTube Music catalog first. JioSaavn tracks
+  // use their title/artist to locate the same recording and its YTM radio ID.
+  let ytmRadioSeedId = !isJioSeed && /^[a-zA-Z0-9_-]{11}$/.test(videoId || "") ? videoId : "";
+  if (!ytmRadioSeedId) {
+    for (const node of nodesToTry) {
+      try {
+        const seedRes: any = await withTimeout(
+          node.search({ query: fullSeedQuery, source: "ytmsearch" }, seedTrack.requester),
+          3500
+        );
+        const catalogSeed = rankSearchTracks<any>(seedRes?.tracks || [], cleanTitle)
+          .find(t => isPreferredRadioUpload(t.info) && sameRecording(t.info, seedTrack.info));
+        if (catalogSeed && /^[a-zA-Z0-9_-]{11}$/.test(catalogSeed.info.identifier || "")) {
+          ytmRadioSeedId = catalogSeed.info.identifier;
+          console.log(`[Smart Autoplay] Matched YTM radio seed: "${catalogSeed.info.title}" by "${catalogSeed.info.author}"`);
+          break;
         }
-      }
-    } catch (e) {
-      console.warn("[Smart Autoplay] JioSaavn discovery notice:", e);
+      } catch {}
     }
   }
 
-  // A /jio radio session stays in the requested catalog when discovery is exhausted.
-  if (isJioSeed) return null;
-
-  // Strategy 1: YouTube Music Native Algorithmic Radio Mix (25 AI-curated related tracks via RD<videoId>)
-  if (videoId && /^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
-    const radioUrl = `https://www.youtube.com/watch?v=${videoId}&list=RD${videoId}`;
+  // Strategy 1: YouTube Music native radio mix. This decides which related
+  // song comes next; JioSaavn may provide the audio stream after selection.
+  if (ytmRadioSeedId) {
+    const radioUrl = `https://www.youtube.com/watch?v=${ytmRadioSeedId}&list=RD${ytmRadioSeedId}`;
     for (const node of nodesToTry) {
       try {
         const radioPromise = node.search({ query: radioUrl }, seedTrack.requester);
@@ -330,7 +321,8 @@ async function discoverAutoplayRecommendation(player: Player, seedTrack: Track):
     }
   }
 
-  // Strategy 3: JioSaavn 320 kbps Autoplay Discovery (unrestricted, authentic 320 kbps studio audio)
+  // Strategy 3: Native JioSaavn discovery is the fallback when YTM did not
+  // return a safe related song.
   if (!foundCandidate) {
     try {
       const jioRec = await findJioSaavnAutoplay(cleanTitle, effectiveArtist, seedLang, historyIds, previousTitles, seedJioId, previousArtists, seedAlbum);
@@ -353,14 +345,42 @@ async function discoverAutoplayRecommendation(player: Player, seedTrack: Track):
   }
 
   if (!foundCandidate) return null;
+  let selectedCandidate: Track = foundCandidate;
+
+  // Keep YTM's recommendation identity, then prefer the exact JioSaavn studio
+  // recording for playback when its title, artist/version and duration match.
+  if (!(selectedCandidate.userData as any)?.isJioSaavn) {
+    try {
+      const jioMatch = await withTimeout(
+        resolveJioSaavnTrack(selectedCandidate.info.title || "", selectedCandidate.info.author || ""),
+        4500
+      );
+      if (jioMatch && sameRecording(
+        { title: jioMatch.title, author: jioMatch.artist, duration: jioMatch.duration * 1000 },
+        selectedCandidate.info
+      )) {
+        const jioPlayback = await withTimeout(loadJioSaavnAsLavalinkTrack(
+          jioMatch,
+          seedTrack.requester,
+          [player.node, ...nodesToTry]
+        ), 3500);
+        if (jioPlayback) {
+          selectedCandidate = jioPlayback.track;
+          console.log(`[Smart Autoplay] Playing YTM-related recommendation from JioSaavn: "${selectedCandidate.info.title}" by "${selectedCandidate.info.author}"`);
+        }
+      }
+    } catch (e) {
+      console.warn("[Smart Autoplay] JioSaavn stream upgrade notice:", e);
+    }
+  }
 
   // Prefer matching catalog recordings; search results do not report source bitrate.
-  let studioMasterTrack: Track = foundCandidate;
-  const isJio = Boolean((foundCandidate as any).userData?.isJioSaavn);
+  let studioMasterTrack: Track = selectedCandidate;
+  const isJio = Boolean((selectedCandidate as any).userData?.isJioSaavn);
   const hqSearchNode = kasawaNode || milloNode || nodesToTry[0];
   if (!isJio && hqSearchNode) {
     try {
-      const parsedCandidate = parseTrackTitle(foundCandidate.info.title || "", foundCandidate.info.author || "");
+      const parsedCandidate = parseTrackTitle(selectedCandidate.info.title || "", selectedCandidate.info.author || "");
       const hqQuery = parsedCandidate.fullSearchQuery || `${parsedCandidate.songTitle} ${parsedCandidate.artist}`.trim();
       const hqRes: any = await hqSearchNode.search({
         query: hqQuery,
@@ -368,9 +388,9 @@ async function discoverAutoplayRecommendation(player: Player, seedTrack: Track):
       }, seedTrack.requester).catch(() => null);
 
       const masters = rankSearchTracks<any>(hqRes?.tracks || [], parsedCandidate.songTitle)
-        .filter(t => isPreferredRadioUpload(t.info) && !restrictedTrackIds.has(t.info.identifier) && sameRecording(t.info, foundCandidate!.info));
+        .filter(t => isPreferredRadioUpload(t.info) && !restrictedTrackIds.has(t.info.identifier) && sameRecording(t.info, selectedCandidate.info));
       const candidateMaster = masters[0];
-      if (candidateMaster && authorConfidence(candidateMaster.info.author) >= authorConfidence(foundCandidate.info.author)) {
+      if (candidateMaster && authorConfidence(candidateMaster.info.author) >= authorConfidence(selectedCandidate.info.author)) {
         studioMasterTrack = candidateMaster;
         studioMasterTrack.userData = { ...studioMasterTrack.userData, searchSource: "ytmsearch" };
         console.log(`[Smart Autoplay] Matched catalog recording: "${candidateMaster.info.title}" by "${candidateMaster.info.author}"`);
@@ -569,7 +589,9 @@ export function initLavalink(client: Client) {
     sendToShard: (guildId, payload) => {
       client.guilds.cache.get(guildId)?.shard.send(payload);
     },
-    autoSkip: true,
+    // We advance explicitly in trackEnd so loadFailed tracks can attempt a
+    // strict JioSaavn recovery before the next playlist item starts.
+    autoSkip: false,
     autoMove: true,
     autoSkipOnResolveError: true,
     playerOptions: {
@@ -881,8 +903,86 @@ export function initLavalink(client: Client) {
     }
   });
 
-  lavalink.on("trackEnd", (player: Player, track, payload) => {
+  async function recoverBeforeQueuedNext(player: Player, failedTrack: Track, failedPosition: number): Promise<boolean> {
+    if (player.getData("recovering_track")) return false;
+    const displacedNext = player.queue.current;
+    const stillWaiting = () => lavalink.getPlayer(player.guildId) === player && player.queue.current === displacedNext;
+    player.setData("recovering_track", true);
+    try {
+      const alternateNodes = Array.from(lavalink.nodeManager.nodes.values())
+        .filter(n => n.connected && n.id !== player.node.id)
+        .sort((a, b) => Number(isNodeHealthy(b.id)) - Number(isNodeHealthy(a.id)));
+      const result = await resolveRecoveryTrack(failedTrack, [...alternateNodes, player.node], stillWaiting, player.node.id);
+      if (!result?.track || !stillWaiting()) return false;
+
+      const recoveredTrack = result.track;
+      const targetNode = result.node;
+      if (player.node.id !== targetNode.id) {
+        await player.changeNode(targetNode, false);
+        if (!stillWaiting()) return false;
+      }
+
+      recoveredTrack.requester = failedTrack.requester;
+      const recoveredIsJio = Boolean((recoveredTrack.userData as any)?.isJioSaavn);
+      recoveredTrack.userData = recoveredIsJio ? {
+        command: (failedTrack.userData as any)?.command,
+        isAutoplay: (failedTrack.userData as any)?.isAutoplay,
+        recoveredFromVideoId: (failedTrack.userData as any)?.requestedVideoId,
+        recoveredFromUri: (failedTrack.userData as any)?.requestedUri,
+        ...recoveredTrack.userData,
+        requestedVideoId: undefined,
+        requestedUri: undefined,
+        recoveryAttempts: Number((failedTrack.userData as any)?.recoveryAttempts || 0) + 1,
+      } : {
+        command: (failedTrack.userData as any)?.command,
+        isAutoplay: (failedTrack.userData as any)?.isAutoplay,
+        requestedVideoId: (failedTrack.userData as any)?.requestedVideoId,
+        requestedUri: (failedTrack.userData as any)?.requestedUri,
+        ...recoveredTrack.userData,
+        recoveryAttempts: Number((failedTrack.userData as any)?.recoveryAttempts || 0) + 1,
+      };
+
+      // lavalink-client already shifted to the next queue item. Put it back so
+      // the recovered recording plays in the failed song's original position.
+      if (displacedNext) player.queue.tracks.unshift(displacedNext);
+      player.queue.current = recoveredTrack;
+      const position = recoveredTrack.info.isSeekable !== false && !recoveredTrack.info.isStream
+        ? Math.min(failedPosition, Math.max(0, recoveredTrack.info.duration - 1000)) : 0;
+      await player.play({ clientTrack: recoveredTrack, noReplace: false, position });
+
+      if (player.textChannelId) {
+        const channel = client.channels.cache.get(player.textChannelId) as TextChannel | undefined;
+        const label = recoveredIsJio ? "**JioSaavn**" : "an alternate stream";
+        channel?.send(`🔄 **Recovered before advancing the queue** via ${label}: **[${recoveredTrack.info.title}](${recoveredTrack.info.uri})**`).then(msg => autoDeleteMessage(msg, 7000)).catch(() => {});
+      }
+      return true;
+    } catch (err: any) {
+      console.warn(`[Queue Recovery] Failed for "${failedTrack.info.title}":`, err?.message || err);
+      return false;
+    } finally {
+      player.setData("recovering_track", false);
+    }
+  }
+
+  lavalink.on("trackEnd", async (player: Player, track, payload) => {
     console.log(`[Player] trackEnd: "${track?.info.title}" | Reason: ${payload.reason} | Position: ${player.position}ms`);
+    if (payload.reason === "replaced") return;
+
+    if (payload.reason === "loadFailed" && track) {
+      const pending = player.getData("pending_failed_track") as { track: Track; position: number } | undefined;
+      player.setData("pending_failed_track", null);
+      const failedTrack = pending && pending.track?.encoded === track.encoded ? pending.track : track;
+      const recovered = await recoverBeforeQueuedNext(player, failedTrack, pending?.position || 0);
+      if (recovered) return;
+    }
+
+    // autoSkip is disabled so that loadFailed can wait for recovery. Continue
+    // normal finished/skipped tracks, or advance after recovery was exhausted.
+    if (player.queue.current) {
+      await player.play({ noReplace: true }).catch((err: any) => {
+        console.warn("[Queue Advance] Failed to start next track:", err?.message || err);
+      });
+    }
     if (!player.queue.current) {
       stopLivePlayerTicker(player.guildId);
     }
@@ -900,7 +1000,29 @@ export function initLavalink(client: Client) {
     console.warn(`[Lavalink] Audio stream stuck for "${track?.info.title}" (${payload.thresholdMs}ms threshold). Handling recovery...`);
 
     if (player.node?.id) markNodeDegraded(player.node.id, 60000);
-    // lavalink-client advances the queue after emitting this event.
+
+    // lavalink-client shifts the queue only after this listener returns. Since
+    // autoSkip is disabled, wait for that exact shift, then recover the failed
+    // recording or explicitly start the expected next item.
+    const expectedNext = player.queue?.tracks?.[0];
+    const failedPosition = player.position || 0;
+    if (!track || !expectedNext) return;
+
+    void (async () => {
+      for (let attempt = 0; attempt < 20 && player.queue.current === track; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      if (lavalink.getPlayer(player.guildId) !== player || player.queue.current !== expectedNext) return;
+
+      const recovered = await recoverBeforeQueuedNext(player, track, failedPosition);
+      if (!recovered && player.queue.current === expectedNext) {
+        await player.play({ noReplace: true }).catch((err: any) => {
+          console.warn("[Queue Advance] Failed to start next track after a stuck stream:", err?.message || err);
+        });
+      }
+    })().catch((err: any) => {
+      console.warn("[Queue Recovery] Stuck-track handling failed:", err?.message || err);
+    });
 
   });
 
@@ -933,11 +1055,20 @@ export function initLavalink(client: Client) {
       restrictedTrackIds.add(track.info.identifier);
     }
 
+    // With queued music, trackEnd will receive loadFailed after lavalink-client
+    // shifts to the next item. Save this track so it can be recovered first.
+    const recoverBeforeAdvance = player.queue.tracks.length > 0;
+    if (recoverBeforeAdvance) {
+      player.setData("pending_failed_track", { track, position: failedPosition });
+    }
+
     // If single track loop is active, disable it to prevent an infinite error loop on this failing song
     if (player.repeatMode === "track") {
       console.warn(`[Universal Recovery] Disabling track loop because "${track?.info.title}" failed to stream.`);
       await player.setRepeatMode("off").catch(() => {});
     }
+
+    if (recoverBeforeAdvance) return;
 
     const rawTitle = track.info.title || "";
     const recoveryAttempts = Number((track.userData as any)?.recoveryAttempts || 0) + 1;

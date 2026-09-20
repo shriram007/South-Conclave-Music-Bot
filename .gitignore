@@ -12,6 +12,7 @@ node_modules/
 lavalink/Lavalink.jar
 lavalink/logs/
 lavalink/plugins/
+lavalink/application.private.yml
 
 # OS and Editor metadata
 .DS_Store
