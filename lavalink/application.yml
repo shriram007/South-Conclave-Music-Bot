@@ -56,26 +56,28 @@ plugins:
     allowDirectVideoIds: true
     allowDirectPlaylistIds: true
 
-    # MUSIC handles ytmsearch only. Prefer non-Web playback clients, with Web
-    # variants and transcoding IOS as fallbacks.
+    # Clients are queried in order. MUSIC handles YouTube Music (and ytmsearch),
+    # followed by mobile/web variants.
     clients:
       - MUSIC
-      - WEB_REMIX
-      - ANDROID_MUSIC
       - ANDROID_VR
-      - TV
-      - TVHTML5_SIMPLY
-      - MWEB
       - WEB
       - WEBEMBEDDED
-      - IOS
+      - TVHTML5_SIMPLY
 
     clientOptions:
       MUSIC:
-        playback: false
-      TV:
+        searching: true
+        playback: true
+      TVHTML5_SIMPLY:
         searching: false
         playlistLoading: false
+
+    # Proof of Origin (poToken) for WEB client to bypass bot checks & SABR without formats.
+    # Can be generated using tools like youtube-trusted-session-generator.
+    pot:
+      token: "${YOUTUBE_PO_TOKEN:}"
+      visitorData: "${YOUTUBE_VISITOR_DATA:}"
 
     oauth:
       # Keep OAuth off unless a fresh disposable-account token is available.

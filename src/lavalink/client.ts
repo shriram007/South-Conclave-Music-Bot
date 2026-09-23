@@ -36,10 +36,10 @@ export const restrictedTrackIds = new RecentFailures();
 
 // YouTube playback health: tracks whether YouTube streams are working at all.
 // When YouTube is globally blocked (all clients fail), skip doomed retries and
-// go straight to JioSaavn recovery for instant, stutter-free playback.
+// go straight to JioSaavn and SoundCloud recovery for instant, stutter-free playback.
 const ytPlaybackFailures: number[] = [];
-const YT_HEALTH_WINDOW_MS = 300000; // 5-minute sliding window
-const YT_HEALTH_FAIL_THRESHOLD = 2; // 2 failures within window = YouTube is broken
+const YT_HEALTH_WINDOW_MS = 600000; // 10-minute sliding window
+const YT_HEALTH_FAIL_THRESHOLD = 1; // 1 failure within window = YouTube is degraded
 
 export function recordYouTubePlaybackFailure(): void {
   ytPlaybackFailures.push(Date.now());
@@ -49,7 +49,7 @@ export function recordYouTubePlaybackFailure(): void {
 }
 
 export function recordYouTubePlaybackSuccess(): void {
-  // A single success resets the health tracker
+  // A verified success resets the health tracker
   ytPlaybackFailures.length = 0;
 }
 
@@ -229,10 +229,13 @@ async function discoverAutoplayRecommendation(player: Player, seedTrack: Track):
     ...player.queue.tracks.map((t) => t.info?.title).filter(Boolean),
   ];
 
+  // Check YouTube health before resolving seed to avoid wasting 3.5s when YouTube is broken
+  const ytHealthy = isYouTubePlaybackHealthy();
+
   // Resolve every seed into the YouTube Music catalog first. JioSaavn tracks
   // use their title/artist to locate the same recording and its YTM radio ID.
   let ytmRadioSeedId = !isJioSeed && /^[a-zA-Z0-9_-]{11}$/.test(videoId || "") ? videoId : "";
-  if (!ytmRadioSeedId) {
+  if (!ytmRadioSeedId && ytHealthy) {
     for (const node of nodesToTry) {
       try {
         const seedRes: any = await withTimeout(
@@ -254,7 +257,6 @@ async function discoverAutoplayRecommendation(player: Player, seedTrack: Track):
   // song comes next; JioSaavn may provide the audio stream after selection.
   // Skip this entirely when YouTube playback is known-broken to avoid wasting
   // 3-7 seconds on doomed network calls that cause stuttering.
-  const ytHealthy = isYouTubePlaybackHealthy();
   if (ytmRadioSeedId && ytHealthy) {
     const radioUrl = `https://www.youtube.com/watch?v=${ytmRadioSeedId}&list=RD${ytmRadioSeedId}`;
     for (const node of nodesToTry) {
@@ -376,6 +378,44 @@ async function discoverAutoplayRecommendation(player: Player, seedTrack: Track):
       }
     } catch (e) {
       console.warn("[Smart Autoplay] JioSaavn autoplay discovery notice:", e);
+    }
+  }
+
+  // Strategy 4: SoundCloud discovery if neither YouTube nor JioSaavn found a candidate
+  if (!foundCandidate) {
+    try {
+      const scQueries = [
+        `${effectiveArtist} ${cleanTitle}`,
+        `${cleanTitle} radio`,
+        `${effectiveArtist} top tracks`,
+      ];
+      for (const scQuery of scQueries) {
+        if (foundCandidate) break;
+        for (const node of nodesToTry) {
+          try {
+            const scRes: any = await withTimeout(
+              node.search({ query: scQuery, source: "scsearch" }, seedTrack.requester),
+              3500
+            );
+            if (scRes?.tracks?.length && scRes.loadType !== "empty" && scRes.loadType !== "error") {
+              const candidate = scRes.tracks.find((t: any) =>
+                !historyIds.has(t.info.identifier) &&
+                !restrictedTrackIds.has(t.info.identifier) &&
+                !isSameSongOrJunk(t.info.title, [...player.queue.previous, ...(player.queue.current ? [player.queue.current] : [])]) &&
+                (t.info.duration || 0) >= 60000 &&
+                (t.info.duration || 0) <= 900000
+              );
+              if (candidate) {
+                foundCandidate = candidate;
+                console.log(`[Smart Autoplay] SoundCloud discovery candidate: "${foundCandidate?.info?.title}" by "${foundCandidate?.info?.author}"`);
+                break;
+              }
+            }
+          } catch {}
+        }
+      }
+    } catch (e) {
+      console.warn("[Smart Autoplay] SoundCloud autoplay discovery notice:", e);
     }
   }
 
@@ -720,12 +760,23 @@ export function initLavalink(client: Client) {
           }
         }
 
+        // Verified playback: if a YouTube track has actually streamed past 4 seconds without error,
+        // it has genuinely succeeded in playing!
+        const currentSource = player.queue.current?.info?.sourceName;
+        if (currentSource && /youtube/i.test(currentSource) && (player.position || 0) >= 4000) {
+          if (!isYouTubePlaybackHealthy()) {
+            console.log(`[YouTube Health] YouTube track "${player.queue.current.info.title}" verified playing at ${player.position}ms. Restoring YouTube health.`);
+          }
+          recordYouTubePlaybackSuccess();
+        }
+
         await updateActivePlayerMessage(player);
 
       } catch (err) {
         console.warn("[Ticker Tick Error]:", err);
       }
     }, 4000);
+    if (typeof (ticker as any)?.unref === "function") (ticker as any).unref();
     liveTickers.set(player.guildId, ticker);
   }
 
@@ -740,10 +791,17 @@ export function initLavalink(client: Client) {
   // Player Events
   // Self-healing: if Lavalink sends playerUpdate while playing and ticker was somehow paused/lost, revive it
   lavalink.on("playerUpdate", (_oldPlayer: any, newPlayer: Player) => {
-    if (newPlayer && newPlayer.queue.current && !newPlayer.paused && newPlayer.playing) {
+    if (newPlayer?.queue?.current && !newPlayer.paused && newPlayer.playing) {
       if (!liveTickers.has(newPlayer.guildId)) {
         console.log(`[Player] Revived live ticker for "${newPlayer.queue.current.info.title}"`);
         startLivePlayerTicker(newPlayer);
+      }
+      const currentSource = newPlayer.queue.current?.info?.sourceName;
+      if (currentSource && /youtube/i.test(currentSource) && (newPlayer.position || 0) >= 4000) {
+        if (!isYouTubePlaybackHealthy()) {
+          console.log(`[YouTube Health] YouTube track "${newPlayer.queue.current.info.title}" verified streaming at ${newPlayer.position}ms. Restoring YouTube health.`);
+        }
+        recordYouTubePlaybackSuccess();
       }
     }
   });
@@ -767,13 +825,6 @@ export function initLavalink(client: Client) {
     }
     player.setData("track_epoch", Number(player.getData("track_epoch") || 0) + 1);
     player.setData("playback_generation", Number(player.getData("playback_generation") || 0) + 1);
-
-    // Record YouTube playback success: if a YouTube track starts playing,
-    // reset the health tracker so future autoplay can try YouTube again.
-    const isYouTubeTrackStart = track?.info?.sourceName && /youtube/i.test(track.info.sourceName);
-    if (isYouTubeTrackStart) {
-      recordYouTubePlaybackSuccess();
-    }
 
     if (requestedVideoId && actual?.info.identifier !== requestedVideoId) {
       const paused = await player.pause().then(() => true, err => { console.warn("[Playback Identity] Failed to pause mismatched video:", err); return false; });

@@ -24,6 +24,7 @@ export async function resolveRecoveryTrack(original, candidateNodes, isCurrent, 
     };
     const ytHealthy = isYouTubePlaybackHealthy();
     const isJioSeed = Boolean(original.userData?.isJioSaavn);
+    const exactId = original.userData?.requestedVideoId;
     // When YouTube playback is globally broken, try JioSaavn & SoundCloud FIRST to avoid
     // wasting 6-9 seconds on doomed YouTube retries that cause stuttering.
     if (!ytHealthy && !isJioSeed) {
@@ -39,24 +40,25 @@ export async function resolveRecoveryTrack(original, candidateNodes, isCurrent, 
             }
         }
         catch { }
-        // If JioSaavn had no match, try SoundCloud before touching YouTube
-        try {
-            const parsed = parseTrackTitle(original.info.title, original.info.author);
-            const scQuery = parsed.fullSearchQuery || `${parsed.songTitle} ${parsed.artist}`.trim();
-            const scResults = await Promise.all(nodes.map(async (node) => {
-                const tracks = await search(node, scQuery, 'scsearch');
-                const track = rankSearchTracks(tracks, parsed.songTitle).find(t => sameRecording(t.info, original.info));
-                return track ? { track, node } : null;
-            }));
-            const scMatched = scResults.find(Boolean);
-            if (active() && scMatched) {
-                console.log(`[Universal Recovery] SoundCloud recovery succeeded for "${original.info.title}" (YouTube was broken).`);
-                return scMatched;
+        // If JioSaavn had no match, try SoundCloud before touching YouTube (never for exact video link requests)
+        if (!exactId) {
+            try {
+                const parsed = parseTrackTitle(original.info.title, original.info.author);
+                const scQuery = parsed.fullSearchQuery || `${parsed.songTitle} ${parsed.artist}`.trim();
+                const scResults = await Promise.all(nodes.map(async (node) => {
+                    const tracks = await search(node, scQuery, 'scsearch');
+                    const track = rankSearchTracks(tracks, parsed.songTitle).find(t => sameRecording(t.info, original.info));
+                    return track ? { track, node } : null;
+                }));
+                const scMatched = scResults.find(Boolean);
+                if (active() && scMatched) {
+                    console.log(`[Universal Recovery] SoundCloud recovery succeeded for "${original.info.title}" (YouTube was broken).`);
+                    return scMatched;
+                }
             }
+            catch { }
         }
-        catch { }
     }
-    const exactId = original.userData?.requestedVideoId;
     const directUri = exactId ? `https://www.youtube.com/watch?v=${exactId}` : original.userData?.streamUri || original.info.uri;
     if (directUri) {
         // Loading metadata for the same encoded YouTube track on the node that just

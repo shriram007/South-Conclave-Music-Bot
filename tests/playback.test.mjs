@@ -371,3 +371,69 @@ test('playlist load failure advances once when no valid Jio replacement exists',
   assert.equal(player.queue.current, next);
   assert.equal(player.queue.tracks.length, 0);
 });
+
+test('YouTube health tracking degrades on failure, ignores premature trackStart, and recovers after verified streaming', async t => {
+  const timer = t.mock.method(globalThis, 'setInterval', () => ({ unref() {} }));
+  const { isYouTubePlaybackHealthy, recordYouTubePlaybackFailure, recordYouTubePlaybackSuccess, lavalink } = await import('../dist/lavalink/client.js');
+  
+  recordYouTubePlaybackFailure();
+  assert.equal(isYouTubePlaybackHealthy(), false);
+
+  // trackStart should NOT mark YouTube healthy prematurely
+  const current = { encoded: 'yt-test', info: info('Test Song', 'testVid1234') };
+  const player = { guildId: 'health-test', queue: { current }, position: 0, playing: true, paused: false, node: { fetchPlayer: async () => ({ track: current }) }, getData: () => null, setData: () => {} };
+  await lavalink.listeners('trackStart')[0](player, current, { track: current });
+  assert.equal(isYouTubePlaybackHealthy(), false);
+
+  // playerUpdate under 4000ms should NOT mark healthy
+  player.position = 2000;
+  await lavalink.listeners('playerUpdate')[0](player, player);
+  assert.equal(isYouTubePlaybackHealthy(), false);
+
+  // playerUpdate at >= 4000ms confirms true audio streaming and restores health
+  player.position = 4500;
+  await lavalink.listeners('playerUpdate')[0](player, player);
+  assert.equal(isYouTubePlaybackHealthy(), true);
+  timer.mock.restore();
+});
+
+test('Universal recovery recovers via SoundCloud when YouTube is unhealthy and JioSaavn fails', async t => {
+  const { recordYouTubePlaybackFailure, recordYouTubePlaybackSuccess } = await import('../dist/lavalink/client.js');
+  recordYouTubePlaybackFailure();
+
+  // Mock fetch to return no JioSaavn results
+  t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({ results: [] })));
+
+  const original = {
+    info: { title: 'Sunflower', author: 'Post Malone', duration: 158000, sourceName: 'youtube', identifier: 'ApXoWvfEYVU', isSeekable: true, isStream: false, uri: 'https://www.youtube.com/watch?v=ApXoWvfEYVU' },
+    userData: {},
+    requester: { id: 'test-user' },
+  };
+
+  const scTrack = {
+    info: { title: 'Sunflower', author: 'Post Malone', duration: 158000, sourceName: 'soundcloud', identifier: 'sc-sunflower', isSeekable: true, isStream: false, uri: 'https://soundcloud.com/postmalone/sunflower' },
+    userData: {},
+  };
+
+  let searchedSource = '';
+  const node = {
+    id: 'sc-recovery-node',
+    connected: true,
+    search: async opts => {
+      searchedSource = opts.source;
+      if (opts.source === 'scsearch') {
+        return { loadType: 'search', tracks: [scTrack] };
+      }
+      return { loadType: 'empty', tracks: [] };
+    },
+  };
+
+  const recovered = await resolveRecoveryTrack(original, [node], () => true);
+  assert.ok(recovered);
+  assert.equal(recovered.track.info.identifier, 'sc-sunflower');
+  assert.equal(searchedSource, 'scsearch');
+
+  // Reset health
+  recordYouTubePlaybackSuccess();
+});
+
