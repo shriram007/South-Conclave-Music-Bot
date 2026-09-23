@@ -24,7 +24,7 @@ export async function resolveRecoveryTrack(original, candidateNodes, isCurrent, 
     };
     const ytHealthy = isYouTubePlaybackHealthy();
     const isJioSeed = Boolean(original.userData?.isJioSaavn);
-    // When YouTube playback is globally broken, try JioSaavn FIRST to avoid
+    // When YouTube playback is globally broken, try JioSaavn & SoundCloud FIRST to avoid
     // wasting 6-9 seconds on doomed YouTube retries that cause stuttering.
     if (!ytHealthy && !isJioSeed) {
         console.log(`[Universal Recovery] YouTube unhealthy — trying JioSaavn first for "${original.info.title}"`);
@@ -36,6 +36,22 @@ export async function resolveRecoveryTrack(original, candidateNodes, isCurrent, 
                     console.log(`[Universal Recovery] JioSaavn-first recovery succeeded for "${original.info.title}" (YouTube was broken).`);
                     return loaded;
                 }
+            }
+        }
+        catch { }
+        // If JioSaavn had no match, try SoundCloud before touching YouTube
+        try {
+            const parsed = parseTrackTitle(original.info.title, original.info.author);
+            const scQuery = parsed.fullSearchQuery || `${parsed.songTitle} ${parsed.artist}`.trim();
+            const scResults = await Promise.all(nodes.map(async (node) => {
+                const tracks = await search(node, scQuery, 'scsearch');
+                const track = rankSearchTracks(tracks, parsed.songTitle).find(t => sameRecording(t.info, original.info));
+                return track ? { track, node } : null;
+            }));
+            const scMatched = scResults.find(Boolean);
+            if (active() && scMatched) {
+                console.log(`[Universal Recovery] SoundCloud recovery succeeded for "${original.info.title}" (YouTube was broken).`);
+                return scMatched;
             }
         }
         catch { }

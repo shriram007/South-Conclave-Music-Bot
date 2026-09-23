@@ -6,7 +6,7 @@ import {
   EmbedBuilder,
   SlashCommandBuilder,
 } from "discord.js";
-import { getBestNode, getOrCreatePlayer, isNodeHealthy, lavalink, markNodeDegraded, purgeAutoplayTracks, restrictedTrackIds, updateActivePlayerMessage } from "../lavalink/client.js";
+import { getBestNode, getOrCreatePlayer, isNodeHealthy, isYouTubePlaybackHealthy, lavalink, markNodeDegraded, purgeAutoplayTracks, restrictedTrackIds, updateActivePlayerMessage } from "../lavalink/client.js";
 import { autoDeleteReply } from "../utils/cleanup.js";
 import { getFavorites } from "../utils/favorites.js";
 import { detectTrackLanguage, formatDuration, getSourceInfo, getTrackRelevanceScore, isRelevantTrack, parseTrackTitle } from "../utils/formatters.js";
@@ -293,6 +293,69 @@ export async function smartSearch(
     console.warn(`[SmartSearch] ${label} on "${node.id}" failed:`, errMsg);
   };
 
+  const ytHealthy = isYouTubePlaybackHealthy();
+  const queryLang = detectTrackLanguage(query);
+  const isIndianQuery = ["tamil", "telugu", "malayalam", "kannada", "hindi", "punjabi"].includes(queryLang);
+
+  const tryJioSaavnResolution = async (reason: string) => {
+    try {
+      const jioTrack = await resolveJioSaavnTrack(query);
+      if (jioTrack) {
+        const candidateNodes = [
+          ...(player.node?.connected ? [player.node] : []),
+          ...Array.from(lavalink.nodeManager.nodes.values()).filter((n: any) => n.connected && n.id !== player.node?.id),
+        ];
+        const converted = await loadJioSaavnAsLavalinkTrack(jioTrack, user, candidateNodes);
+        if (converted) {
+          await syncPlayerNode(converted.node);
+          converted.track.userData = {
+            ...(converted.track.userData || {}),
+            command: "/play",
+          };
+          console.log(`[SmartSearch] Resolved "${query}" via JioSaavn 320kbps Studio Master on node "${converted.node.id}" (${reason})`);
+          return { loadType: "track", tracks: [converted.track] };
+        }
+      }
+    } catch (e: any) {
+      console.warn(`[SmartSearch] JioSaavn check notice (${reason}):`, e?.message || e);
+    }
+    return null;
+  };
+
+  const trySoundCloudResolution = async (reason: string) => {
+    for (const node of nodesToTry) {
+      try {
+        const res: any = await executeSearchWithTimeout(node, { query, source: "scsearch" });
+        if (res?.tracks?.length && res.loadType !== "empty" && res.loadType !== "error") {
+          const viable = res.tracks.filter((t: any) => !restrictedTrackIds.has(t.info.identifier));
+          if (viable.length > 0) {
+            const relevant = rankSearchTracks<any>(viable, query);
+            if (relevant.length > 0) {
+              await syncPlayerNode(node);
+              console.log(`[SmartSearch] Found "${relevant[0].info.title}" via scsearch on node "${node.id}" (${reason})`);
+              return { ...res, tracks: relevant };
+            }
+          }
+        }
+      } catch (e: any) {
+        handleSearchError(node, e, "scsearch");
+      }
+    }
+    return null;
+  };
+
+  // When YouTube playback is degraded/broken OR when an Indian query is detected,
+  // prioritize JioSaavn & SoundCloud first to avoid doomed YouTube loadFailed errors.
+  if (!ytHealthy || isIndianQuery) {
+    const jioRes = await tryJioSaavnResolution(!ytHealthy ? "YouTube playback unhealthy" : "Indian query priority");
+    if (jioRes) return jioRes;
+
+    if (!ytHealthy) {
+      const scRes = await trySoundCloudResolution("YouTube playback unhealthy");
+      if (scRes) return scRes;
+    }
+  }
+
   // 1. Try YouTube Music (ytmsearch) across connected healthy nodes
   for (const node of nodesToTry) {
     try {
@@ -315,31 +378,9 @@ export async function smartSearch(
   }
 
   // 1.5. If Indian query and YouTube Music had no studio match, try JioSaavn 320 kbps Studio Master
-  // (Prevents falling back to dialogue-laden YouTube movie video edits or anniversary specials)
-  const queryLang = detectTrackLanguage(query);
-  const isIndianQuery = ["tamil", "telugu", "malayalam", "kannada", "hindi", "punjabi"].includes(queryLang);
   if (isIndianQuery) {
-    try {
-      const jioTrack = await resolveJioSaavnTrack(query);
-      if (jioTrack) {
-        const candidateNodes = [
-          ...(player.node?.connected ? [player.node] : []),
-          ...Array.from(lavalink.nodeManager.nodes.values()).filter((n: any) => n.connected && n.id !== player.node?.id),
-        ];
-        const converted = await loadJioSaavnAsLavalinkTrack(jioTrack, user, candidateNodes);
-        if (converted) {
-          await syncPlayerNode(converted.node);
-          converted.track.userData = {
-            ...(converted.track.userData || {}),
-            command: "/play",
-          };
-          console.log(`[SmartSearch] Resolved Indian query "${query}" via JioSaavn 320kbps Studio Master on node "${converted.node.id}"`);
-          return { loadType: "track", tracks: [converted.track] };
-        }
-      }
-    } catch (e: any) {
-      console.warn("[SmartSearch] JioSaavn priority check notice:", e?.message || e);
-    }
+    const jioRes = await tryJioSaavnResolution("Indian query YTM fallback");
+    if (jioRes) return jioRes;
   }
 
   // 2. Try YouTube search appending "audio" (favors authentic studio tracks over age-gated music videos)
@@ -383,27 +424,8 @@ export async function smartSearch(
   }
 
   // 5. Ultimate Fallback: Try JioSaavn 320 kbps Studio Master if global providers found no match
-  try {
-    const jioTrack = await resolveJioSaavnTrack(query);
-    if (jioTrack) {
-      const candidateNodes = [
-        ...(player.node?.connected ? [player.node] : []),
-        ...Array.from(lavalink.nodeManager.nodes.values()).filter((n: any) => n.connected && n.id !== player.node?.id),
-      ];
-      const converted = await loadJioSaavnAsLavalinkTrack(jioTrack, user, candidateNodes);
-      if (converted) {
-        await syncPlayerNode(converted.node);
-        converted.track.userData = {
-          ...(converted.track.userData || {}),
-          command: "/play",
-        };
-        console.log(`[SmartSearch] Fallback resolved "${converted.track.info.title}" via JioSaavn 320kbps Studio Master on node "${converted.node.id}"`);
-        return { loadType: "track", tracks: [converted.track] };
-      }
-    }
-  } catch (e: any) {
-    console.warn("[SmartSearch] JioSaavn resolution notice:", e?.message || e);
-  }
+  const jioUltimate = await tryJioSaavnResolution("ultimate fallback");
+  if (jioUltimate) return jioUltimate;
 
   return null;
 }

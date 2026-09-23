@@ -24,7 +24,7 @@ export const restrictedTrackIds = new RecentFailures();
 // go straight to JioSaavn recovery for instant, stutter-free playback.
 const ytPlaybackFailures = [];
 const YT_HEALTH_WINDOW_MS = 300000; // 5-minute sliding window
-const YT_HEALTH_FAIL_THRESHOLD = 3; // 3 failures within window = YouTube is broken
+const YT_HEALTH_FAIL_THRESHOLD = 2; // 2 failures within window = YouTube is broken
 export function recordYouTubePlaybackFailure() {
     ytPlaybackFailures.push(Date.now());
     // Trim old entries outside the window
@@ -89,12 +89,15 @@ export async function autoMaximizeVoiceChannelBitrate(voiceChannel) {
     if (!voiceChannel)
         return;
     try {
-        const maxBitrate = voiceChannel.guild.maximumBitrate;
+        // Cap voice channel bitrate to 192 kbps. Forcing 384 kbps causes severe UDP packet loss,
+        // jitter buffer exhaustion, and stuttering for mobile/remote listeners.
+        // 192 kbps delivers studio-grade transparent stereo Opus with zero audio drops.
+        const maxBitrate = Math.min(voiceChannel.guild.maximumBitrate, 192000);
         if (voiceChannel.bitrate < maxBitrate) {
             const botMember = voiceChannel.guild.members.me;
             if (botMember && voiceChannel.permissionsFor(botMember)?.has("ManageChannels")) {
                 await voiceChannel.setBitrate(maxBitrate, "Music playback: use available channel bitrate");
-                console.log(`[Audio Quality] Auto-maximized voice channel "${voiceChannel.name}" to ${Math.round(maxBitrate / 1000)} kbps.`);
+                console.log(`[Audio Quality] Optimized voice channel "${voiceChannel.name}" to ${Math.round(maxBitrate / 1000)} kbps.`);
             }
         }
     }
@@ -967,23 +970,25 @@ export function initLavalink(client) {
         // recording or explicitly start the expected next item.
         const expectedNext = player.queue?.tracks?.[0];
         const failedPosition = player.position || 0;
-        if (!track || !expectedNext)
+        if (!track)
             return;
-        void (async () => {
-            for (let attempt = 0; attempt < 20 && player.queue.current === track; attempt++) {
-                await new Promise(resolve => setTimeout(resolve, 25));
-            }
-            if (lavalink.getPlayer(player.guildId) !== player || player.queue.current !== expectedNext)
-                return;
-            const recovered = await recoverBeforeQueuedNext(player, track, failedPosition);
-            if (!recovered && player.queue.current === expectedNext) {
-                await player.play({ noReplace: true }).catch((err) => {
-                    console.warn("[Queue Advance] Failed to start next track after a stuck stream:", err?.message || err);
-                });
-            }
-        })().catch((err) => {
-            console.warn("[Queue Recovery] Stuck-track handling failed:", err?.message || err);
-        });
+        if (expectedNext) {
+            void (async () => {
+                for (let attempt = 0; attempt < 20 && player.queue.current === track; attempt++) {
+                    await new Promise(resolve => setTimeout(resolve, 25));
+                }
+                if (lavalink.getPlayer(player.guildId) !== player || player.queue.current !== expectedNext)
+                    return;
+                const recovered = await recoverBeforeQueuedNext(player, track, failedPosition);
+                if (!recovered && player.queue.current === expectedNext) {
+                    await player.play({ noReplace: true }).catch((err) => {
+                        console.warn("[Queue Advance] Failed to start next track after a stuck stream:", err?.message || err);
+                    });
+                }
+            })().catch((err) => {
+                console.warn("[Queue Recovery] Stuck-track handling failed:", err?.message || err);
+            });
+        }
     });
     lavalink.on("trackError", async (player, track, payload) => {
         if (payload?.track?.encoded && track?.encoded && payload.track.encoded !== track.encoded)

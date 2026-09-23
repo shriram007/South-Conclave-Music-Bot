@@ -174,12 +174,15 @@ export async function getSpellingSuggestion(query: string): Promise<string | nul
       if (Array.isArray(data[1]) && data[1].length > 0) {
         for (const item of data[1]) {
           const cleaned = String(item)
-            .replace(/ songs?.*$/i, "")
-            .replace(/ lyrics.*$/i, "")
-            .replace(/ ringtone.*$/i, "")
-            .replace(/ download.*$/i, "")
+            .replace(/\b(songs?|lyrics?|ringtone|download|wallpaper|meaning|chords|quotes|status|cast|piano|remix|cover|video)\b.*$/gi, "")
             .trim();
-          if (cleaned && cleaned.toLowerCase() !== cleanQ.toLowerCase()) {
+          if (
+            cleaned &&
+            cleaned.toLowerCase() !== cleanQ.toLowerCase() &&
+            !cleaned.toLowerCase().startsWith(cleanQ.toLowerCase()) &&
+            !/^(is|who|what|why|how|does|can|when|where|are)\b/i.test(cleaned) &&
+            cleaned.length <= cleanQ.length + 8
+          ) {
             return cleaned;
           }
         }
@@ -203,9 +206,18 @@ export async function resolveJioSaavnTrack(title: string, artist: string = ""): 
     searchTitle,
   ].filter(Boolean))];
 
+  const targetIdentity = {
+    title: searchTitle || title,
+    author: searchArtist || artist,
+  };
+  const rawTargetIdentity = { title, author: artist };
+
   for (const q of queriesToTry) {
     const results = await searchJioSaavn(q, 5);
-    const match = results.find((t) => sameRecording({ title: t.title, author: t.artist }, { title, author: artist }));
+    const match = results.find(
+      (t) => sameRecording({ title: t.title, author: t.artist }, targetIdentity) ||
+             sameRecording({ title: t.title, author: t.artist }, rawTargetIdentity)
+    );
     if (match) return match;
   }
 
@@ -215,7 +227,8 @@ export async function resolveJioSaavnTrack(title: string, artist: string = ""): 
     console.log(`[JioSaavn Resolver] Typo detected in "${fullQuery}". Auto-correcting to "${suggestion}"...`);
     const correctedResults = await searchJioSaavn(suggestion, 5);
     const match = correctedResults.find(
-      (t) => sameRecording({ title: t.title, author: t.artist }, { title, author: artist })
+      (t) => sameRecording({ title: t.title, author: t.artist }, targetIdentity) ||
+             sameRecording({ title: t.title, author: t.artist }, rawTargetIdentity)
     );
     if (match) return match;
   }

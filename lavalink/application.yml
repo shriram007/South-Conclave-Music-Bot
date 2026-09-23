@@ -25,11 +25,11 @@ lavalink:
       http: true
       local: false
 
-    bufferDurationMs: 800
-    frameBufferDurationMs: 8000
-    opusEncodingQuality: 10
-    resamplingQuality: HIGH
-    trackStuckThresholdMs: 6000
+    bufferDurationMs: 400
+    frameBufferDurationMs: 5000
+    opusEncodingQuality: 8
+    resamplingQuality: MEDIUM
+    trackStuckThresholdMs: 10000
     useSeekGhosting: true
     youtubePlaylistLoadLimit: 100
     playerUpdateInterval: 5

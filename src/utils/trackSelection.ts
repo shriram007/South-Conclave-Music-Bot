@@ -9,9 +9,18 @@ export interface TrackIdentity {
 export function normalizeIdentity(value: string): string {
   return value.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim();
 }
+function cleanTitleForComparison(title: string): string {
+  return normalizeIdentity(
+    parseTrackTitle(title).songTitle
+      .replace(/\((?:feat\.?|ft\.?|featuring|with)\s+.*?\)/gi, '')
+      .replace(/\[(?:feat\.?|ft\.?|featuring|with)\s+.*?\]/gi, '')
+      .replace(/\b(?:feat\.?|ft\.?|featuring|with)\s+.*$/gi, '')
+  );
+}
+
 export function sameTitle(a: string, b: string): boolean {
-  const left = normalizeIdentity(parseTrackTitle(a).songTitle);
-  const right = normalizeIdentity(parseTrackTitle(b).songTitle);
+  const left = cleanTitleForComparison(a);
+  const right = cleanTitleForComparison(b);
   if (!left || !right) return false;
   return left === right || (Math.min(left.length, right.length) >= 6 && calculateFuzzySimilarity(left, right) >= 0.86);
 }
@@ -46,16 +55,36 @@ export function sameRecording(candidate: TrackIdentity, target: TrackIdentity): 
 export function rankSearchTracks<T extends { info: TrackIdentity }>(tracks: T[], query: string): T[] {
   const target = parseTrackTitle(query);
   const normalizedQuery = normalizeIdentity(query);
+  const targetTitle = cleanTitleForComparison(target.songTitle);
   const score = (track: T) => {
     const parsed = parseTrackTitle(track.info.title, track.info.author);
-    const title = normalizeIdentity(parsed.songTitle);
-    const metadata = normalizeIdentity(`${parsed.songTitle} ${parsed.movieOrAlbum} ${parsed.artist}`);
+    const title = cleanTitleForComparison(parsed.songTitle);
+    const metadata = normalizeIdentity(`${parsed.songTitle} ${parsed.movieOrAlbum} ${parsed.artist} ${track.info.author || ''}`);
     const tokens = normalizedQuery.split(' ').filter(Boolean);
     const coverage = tokens.filter(t => metadata.split(' ').includes(t)).length / Math.max(tokens.length, 1);
     const exact = sameTitle(track.info.title, target.songTitle);
-    if (track.info.isStream || hasUnrequestedVersion(track.info.title, query) || (!exact && (title.length < 3 || !normalizedQuery.includes(title) || coverage < 0.8))) return -Infinity;
-    if (target.artist && parsed.artist && !normalizeIdentity(parsed.artist).includes(normalizeIdentity(target.artist))) return -Infinity;
-    return (exact ? 10 : 8) + coverage + authorConfidence(track.info.author);
+
+    if (track.info.isStream || hasUnrequestedVersion(track.info.title, query)) return -Infinity;
+
+    const titleOverlap = title.length >= 3 && (
+      title.includes(targetTitle) ||
+      targetTitle.includes(title) ||
+      normalizedQuery.includes(title) ||
+      (title.length >= 5 && targetTitle.length >= 5 && calculateFuzzySimilarity(title, targetTitle) >= 0.8)
+    );
+
+    if (!exact && (!titleOverlap || coverage < 0.6)) return -Infinity;
+
+    if (target.artist && parsed.artist) {
+      const ta = normalizeIdentity(target.artist);
+      const pa = normalizeIdentity(parsed.artist);
+      const taTokens = ta.split(' ').filter(t => t.length > 2);
+      const paTokens = pa.split(' ').filter(t => t.length > 2);
+      const hasArtistOverlap = ta.includes(pa) || pa.includes(ta) || taTokens.some(t => paTokens.includes(t));
+      if (!hasArtistOverlap) return -Infinity;
+    }
+
+    return (exact ? 10 : 8) + coverage * 2 + authorConfidence(track.info.author);
   };
   return tracks.map(track => ({ track, score: score(track) })).filter(x => Number.isFinite(x.score)).sort((a, b) => b.score - a.score).map(x => x.track);
 }
