@@ -40,24 +40,32 @@ export async function resolveRecoveryTrack(original, candidateNodes, isCurrent, 
             }
         }
         catch { }
-        // If JioSaavn had no match, try SoundCloud before touching YouTube (never for exact video link requests)
-        if (!exactId) {
-            try {
-                const parsed = parseTrackTitle(original.info.title, original.info.author);
-                const scQuery = parsed.fullSearchQuery || `${parsed.songTitle} ${parsed.artist}`.trim();
-                const scResults = await Promise.all(nodes.map(async (node) => {
-                    const tracks = await search(node, scQuery, 'scsearch');
-                    const track = rankSearchTracks(tracks, parsed.songTitle).find(t => sameRecording(t.info, original.info));
-                    return track ? { track, node } : null;
-                }));
-                const scMatched = scResults.find(Boolean);
-                if (active() && scMatched) {
-                    console.log(`[Universal Recovery] SoundCloud recovery succeeded for "${original.info.title}" (YouTube was broken).`);
-                    return scMatched;
-                }
+        // If JioSaavn had no match, try SoundCloud before touching YouTube
+        try {
+            const parsed = parseTrackTitle(original.info.title, original.info.author);
+            const scQuery = parsed.fullSearchQuery || `${parsed.songTitle} ${parsed.artist}`.trim();
+            const scResults = await Promise.all(nodes.map(async (node) => {
+                const tracks = await search(node, scQuery, 'scsearch');
+                const track = rankSearchTracks(tracks, parsed.songTitle).find(t => sameRecording(t.info, original.info));
+                return track ? { track, node } : null;
+            }));
+            const scMatched = scResults.find(Boolean);
+            if (active() && scMatched) {
+                console.log(`[Universal Recovery] SoundCloud recovery succeeded for "${original.info.title}" (YouTube was broken).`);
+                scMatched.track.info = {
+                    ...scMatched.track.info,
+                    title: original.info.title,
+                    author: original.info.author,
+                    artworkUrl: original.info.artworkUrl || scMatched.track.info.artworkUrl,
+                };
+                scMatched.track.userData = {
+                    ...(original.userData || {}),
+                    searchSource: 'scsearch',
+                };
+                return scMatched;
             }
-            catch { }
         }
+        catch { }
     }
     const directUri = exactId ? `https://www.youtube.com/watch?v=${exactId}` : original.userData?.streamUri || original.info.uri;
     if (directUri) {
