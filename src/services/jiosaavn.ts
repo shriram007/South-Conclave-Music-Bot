@@ -249,7 +249,7 @@ export function rankJioSaavnRecommendations(
     !hasUnrequestedVersion(t.title) && Number.isFinite(t.duration) && t.duration >= 60 && t.duration <= 900 &&
     !!t.artist.trim() && !/^(unknown|jiosaavn artist|various artists)$/i.test(t.artist.trim()) &&
     !excludeIds.has(t.id) && !excludeIds.has(t.streamUrl) &&
-    (language === "global" || t.language === language) &&
+    ((language === "global" || language === "english") ? (t.language === "english" || t.language === "global") : t.language === language) &&
     ![seedTitle, ...previousTitles].some(title => sameTitle(t.title, title))
   );
   const isRecentArtist = (track: JioSaavnTrack) => {
