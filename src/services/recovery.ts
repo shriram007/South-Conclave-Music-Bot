@@ -2,6 +2,7 @@ import { withTimeout } from '../utils/playback.js';
 import { authorConfidence, rankSearchTracks, sameRecording } from '../utils/trackSelection.js';
 import { parseTrackTitle } from '../utils/formatters.js';
 import { loadJioSaavnAsLavalinkTrack, resolveJioSaavnTrack, resolveJioSaavnUrl } from './jiosaavn.js';
+import { isYouTubePlaybackHealthy } from '../lavalink/client.js';
 
 /** Bounded recovery. Explicit video links can only recover the same video or a strictly matched catalog recording. */
 export async function resolveRecoveryTrack(
@@ -10,7 +11,7 @@ export async function resolveRecoveryTrack(
   isCurrent: () => boolean,
   failedNodeId?: string,
 ): Promise<{ track: any; node: any } | null> {
-  const deadline = Date.now() + 14000;
+  const deadline = Date.now() + 10000;
   const nodes = candidateNodes.filter((n, i, all) => n?.connected && all.findIndex(x => x?.id === n.id) === i).slice(0, 3);
   // A node that already failed every YouTube playback client must not receive
   // the same recording again. Keep it available for HTTP/JioSaavn loading.
@@ -23,6 +24,26 @@ export async function resolveRecoveryTrack(
       return active() && Array.isArray(result?.tracks) ? result.tracks : [];
     } catch { return []; }
   };
+
+  const ytHealthy = isYouTubePlaybackHealthy();
+  const isJioSeed = Boolean(original.userData?.isJioSaavn);
+
+  // When YouTube playback is globally broken, try JioSaavn FIRST to avoid
+  // wasting 6-9 seconds on doomed YouTube retries that cause stuttering.
+  if (!ytHealthy && !isJioSeed) {
+    console.log(`[Universal Recovery] YouTube unhealthy — trying JioSaavn first for "${original.info.title}"`);
+    try {
+      const jio = await withTimeout(resolveJioSaavnTrack(original.info.title, original.info.author), Math.min(4000, deadline - Date.now()));
+      if (active() && jio && sameRecording({ title: jio.title, author: jio.artist, duration: jio.duration * 1000 }, original.info)) {
+        const loaded = await withTimeout(loadJioSaavnAsLavalinkTrack(jio, original.requester, nodes), Math.min(3000, deadline - Date.now()));
+        if (active() && loaded) {
+          console.log(`[Universal Recovery] JioSaavn-first recovery succeeded for "${original.info.title}" (YouTube was broken).`);
+          return loaded;
+        }
+      }
+    } catch {}
+  }
+
   const exactId = original.userData?.requestedVideoId;
   const directUri = exactId ? `https://www.youtube.com/watch?v=${exactId}` : original.userData?.streamUri || original.info.uri;
   if (directUri) {
@@ -51,18 +72,21 @@ export async function resolveRecoveryTrack(
   if (!active()) return null;
 
   // High-fidelity fallback to JioSaavn 320 kbps Studio Master if YouTube playback failed
-  try {
-    const jio = original.userData?.isJioSaavn
-      ? await withTimeout(resolveJioSaavnUrl(original.info.uri), Math.min(4000, deadline - Date.now())).then(r => r?.type === 'track' ? r.track : null)
-      : await withTimeout(resolveJioSaavnTrack(original.info.title, original.info.author), Math.min(4000, deadline - Date.now()));
-    if (active() && jio && sameRecording({ title: jio.title, author: jio.artist, duration: jio.duration * 1000 }, original.info)) {
-      const loaded = await withTimeout(loadJioSaavnAsLavalinkTrack(jio, original.requester, nodes), Math.min(3000, deadline - Date.now()));
-      if (active() && loaded) {
-        console.log(`[Universal Recovery] Successfully recovered blocked track "${original.info.title}" via JioSaavn 320 kbps Studio Master.`);
-        return loaded;
+  // (Skip if we already tried JioSaavn-first above when YouTube was unhealthy)
+  if (ytHealthy || isJioSeed) {
+    try {
+      const jio = isJioSeed
+        ? await withTimeout(resolveJioSaavnUrl(original.info.uri), Math.min(4000, deadline - Date.now())).then(r => r?.type === 'track' ? r.track : null)
+        : await withTimeout(resolveJioSaavnTrack(original.info.title, original.info.author), Math.min(4000, deadline - Date.now()));
+      if (active() && jio && sameRecording({ title: jio.title, author: jio.artist, duration: jio.duration * 1000 }, original.info)) {
+        const loaded = await withTimeout(loadJioSaavnAsLavalinkTrack(jio, original.requester, nodes), Math.min(3000, deadline - Date.now()));
+        if (active() && loaded) {
+          console.log(`[Universal Recovery] Successfully recovered blocked track "${original.info.title}" via JioSaavn 320 kbps Studio Master.`);
+          return loaded;
+        }
       }
-    }
-  } catch {}
+    } catch {}
+  }
 
   if (exactId || !active()) return null;
   const parsed = parseTrackTitle(original.info.title, original.info.author);

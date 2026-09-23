@@ -34,6 +34,31 @@ export const playerMessageCache = new Map<string, Message>(); // guildId -> Mess
 // Short cooldown for failed recordings; provider restrictions may be temporary.
 export const restrictedTrackIds = new RecentFailures();
 
+// YouTube playback health: tracks whether YouTube streams are working at all.
+// When YouTube is globally blocked (all clients fail), skip doomed retries and
+// go straight to JioSaavn recovery for instant, stutter-free playback.
+const ytPlaybackFailures: number[] = [];
+const YT_HEALTH_WINDOW_MS = 300000; // 5-minute sliding window
+const YT_HEALTH_FAIL_THRESHOLD = 3; // 3 failures within window = YouTube is broken
+
+export function recordYouTubePlaybackFailure(): void {
+  ytPlaybackFailures.push(Date.now());
+  // Trim old entries outside the window
+  const cutoff = Date.now() - YT_HEALTH_WINDOW_MS;
+  while (ytPlaybackFailures.length > 0 && ytPlaybackFailures[0] < cutoff) ytPlaybackFailures.shift();
+}
+
+export function recordYouTubePlaybackSuccess(): void {
+  // A single success resets the health tracker
+  ytPlaybackFailures.length = 0;
+}
+
+export function isYouTubePlaybackHealthy(): boolean {
+  const cutoff = Date.now() - YT_HEALTH_WINDOW_MS;
+  while (ytPlaybackFailures.length > 0 && ytPlaybackFailures[0] < cutoff) ytPlaybackFailures.shift();
+  return ytPlaybackFailures.length < YT_HEALTH_FAIL_THRESHOLD;
+}
+
 // Dynamic node health & circuit breaker: tracks nodes returning 502/HTML errors or timeouts
 export const degradedNodes = new Map<string, number>(); // nodeId -> expiry timestamp
 
@@ -224,7 +249,10 @@ async function discoverAutoplayRecommendation(player: Player, seedTrack: Track):
 
   // Strategy 1: YouTube Music native radio mix. This decides which related
   // song comes next; JioSaavn may provide the audio stream after selection.
-  if (ytmRadioSeedId) {
+  // Skip this entirely when YouTube playback is known-broken to avoid wasting
+  // 3-7 seconds on doomed network calls that cause stuttering.
+  const ytHealthy = isYouTubePlaybackHealthy();
+  if (ytmRadioSeedId && ytHealthy) {
     const radioUrl = `https://www.youtube.com/watch?v=${ytmRadioSeedId}&list=RD${ytmRadioSeedId}`;
     for (const node of nodesToTry) {
       try {
@@ -267,10 +295,14 @@ async function discoverAutoplayRecommendation(player: Player, seedTrack: Track):
         }
       }
     }
+  } else if (!ytHealthy && ytmRadioSeedId) {
+    console.log(`[Smart Autoplay] Skipping YouTube radio (YouTube playback unhealthy: ${ytPlaybackFailures.length} recent failures). Going straight to JioSaavn.`);
   }
 
   // Strategy 2: Curated artist hits & similar song search across nodes if RD playlist did not match
-  if (!foundCandidate) {
+  // When YouTube is broken, skip Strategy 2 (ytmsearch still works for metadata
+  // selection even if playback will fail — but we prefer JioSaavn-first in Strategy 3).
+  if (!foundCandidate && ytHealthy) {
     const queriesToTry: string[] = [];
     if (seedLang !== "global" && seedLang !== "english") {
       queriesToTry.push(
@@ -375,10 +407,13 @@ async function discoverAutoplayRecommendation(player: Player, seedTrack: Track):
   }
 
   // Prefer matching catalog recordings; search results do not report source bitrate.
+  // Skip the YouTube re-search upgrade when:
+  //   1. The candidate is already a JioSaavn track (already has 320kbps audio)
+  //   2. YouTube playback is known-broken (upgrade would just fail later)
   let studioMasterTrack: Track = selectedCandidate;
   const isJio = Boolean((selectedCandidate as any).userData?.isJioSaavn);
   const hqSearchNode = kasawaNode || milloNode || nodesToTry[0];
-  if (!isJio && hqSearchNode) {
+  if (!isJio && ytHealthy && hqSearchNode) {
     try {
       const parsedCandidate = parseTrackTitle(selectedCandidate.info.title || "", selectedCandidate.info.author || "");
       const hqQuery = parsedCandidate.fullSearchQuery || `${parsedCandidate.songTitle} ${parsedCandidate.artist}`.trim();
@@ -665,6 +700,10 @@ export function initLavalink(client: Client) {
         // If paused or stream not active, skip this tick without killing the timer
         if (player.paused) return;
 
+        // Pause ticker updates during active recovery to prevent UI stutter
+        // and reduce Discord API rate-limit pressure during error storms
+        if (player.getData("recovering_track")) return;
+
         // Gapless Preload: When current track has < 12 seconds remaining, pre-resolve next track
         const remaining = (player.queue.current.info.duration || 0) - (player.position || 0);
         if (remaining > 0 && remaining <= 12000 && player.queue.tracks.length > 0) {
@@ -725,6 +764,14 @@ export function initLavalink(client: Client) {
     }
     player.setData("track_epoch", Number(player.getData("track_epoch") || 0) + 1);
     player.setData("playback_generation", Number(player.getData("playback_generation") || 0) + 1);
+
+    // Record YouTube playback success: if a YouTube track starts playing,
+    // reset the health tracker so future autoplay can try YouTube again.
+    const isYouTubeTrackStart = track?.info?.sourceName && /youtube/i.test(track.info.sourceName);
+    if (isYouTubeTrackStart) {
+      recordYouTubePlaybackSuccess();
+    }
+
     if (requestedVideoId && actual?.info.identifier !== requestedVideoId) {
       const paused = await player.pause().then(() => true, err => { console.warn("[Playback Identity] Failed to pause mismatched video:", err); return false; });
       if (player.textChannelId) {
@@ -1043,6 +1090,15 @@ export function initLavalink(client: Client) {
     if (isNodeNetworkDown && player.node?.id) {
       console.warn(`[Node Circuit Breaker] Node "${player.node?.id}" network drop. Marking degraded for 60s.`);
       markNodeDegraded(player.node.id, 60000);
+    }
+
+    // Track YouTube playback health: if a YouTube source track failed, record it
+    const isYouTubeSource = track?.info?.sourceName && /youtube/i.test(track.info.sourceName);
+    if (isYouTubeSource && !isNodeNetworkDown) {
+      recordYouTubePlaybackFailure();
+      if (!isYouTubePlaybackHealthy()) {
+        console.warn(`[YouTube Health] YouTube playback unhealthy (${ytPlaybackFailures.length} recent failures). Future autoplay will prefer JioSaavn.`);
+      }
     }
 
     if (!track || player.getData("recovering_track")) return;

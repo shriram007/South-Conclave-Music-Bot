@@ -25,11 +25,11 @@ lavalink:
       http: true
       local: false
 
-    bufferDurationMs: 400
-    frameBufferDurationMs: 5000
+    bufferDurationMs: 800
+    frameBufferDurationMs: 8000
     opusEncodingQuality: 10
     resamplingQuality: HIGH
-    trackStuckThresholdMs: 10000
+    trackStuckThresholdMs: 6000
     useSeekGhosting: true
     youtubePlaylistLoadLimit: 100
     playerUpdateInterval: 5
@@ -60,8 +60,10 @@ plugins:
     # variants and transcoding IOS as fallbacks.
     clients:
       - MUSIC
+      - WEB_REMIX
       - ANDROID_MUSIC
       - ANDROID_VR
+      - TV
       - TVHTML5_SIMPLY
       - MWEB
       - WEB
@@ -71,6 +73,9 @@ plugins:
     clientOptions:
       MUSIC:
         playback: false
+      TV:
+        searching: false
+        playlistLoading: false
 
     oauth:
       # Keep OAuth off unless a fresh disposable-account token is available.
