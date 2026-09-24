@@ -13,34 +13,7 @@ import { detectTrackLanguage, formatDuration, getSourceInfo, getTrackRelevanceSc
 import { getPlaylist, getUserPlaylists } from "../utils/playlists.js";
 import { getMusicSuggestions } from "../utils/suggestions.js";
 import { isJioSaavnUrl, loadJioSaavnAsLavalinkTrack, resolveJioSaavnTrack, resolveJioSaavnUrl } from "../services/jiosaavn.js";
-
-async function resolveSpotifyTrack(url: string): Promise<string | null> {
-  try {
-    const cleanUrl = url.split("?")[0];
-    const resp = await fetch(cleanUrl, {
-      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" },
-      signal: AbortSignal.timeout(4000),
-    });
-    if (resp.ok) {
-      const html = await resp.text();
-      const match = html.match(/<title>(.*?) - song (?:and lyrics )?by (.*?) \| Spotify<\/title>/i);
-      if (match && match[1] && match[2]) {
-        console.log(`[Spotify Resolver] Resolved "${cleanUrl}" -> "${match[1]} ${match[2]}"`);
-        return `${match[1]} ${match[2]}`.trim();
-      }
-    }
-    const oembedResp = await fetch(`https://open.spotify.com/oembed?url=${encodeURIComponent(cleanUrl)}`, { signal: AbortSignal.timeout(4000) });
-    if (oembedResp.ok) {
-      const data = (await oembedResp.json()) as { title?: string; author_name?: string };
-      if (data.title) {
-        return `${data.title} ${data.author_name || ""}`.trim();
-      }
-    }
-  } catch (e) {
-    console.warn("[Spotify Resolver] Error:", e);
-  }
-  return null;
-}
+import { isSpotifyPlaylistOrAlbum, isSpotifyTrackUrl, resolveSpotifyTrack, resolveSpotifyCollection } from "../services/spotify.js";
 
 async function resolveAppleMusicTrack(url: string): Promise<string | null> {
   try {
@@ -86,7 +59,7 @@ export async function resolveTrackQuery(rawQuery: string): Promise<{ query: stri
   }
 
   // If Spotify track link: resolve track title & artist for 100% stable YouTube Music HQ audio stream
-  if (/^https?:\/\/open\.spotify\.com\/track\//i.test(trimmed)) {
+  if (isSpotifyTrackUrl(trimmed)) {
     const resolved = await resolveSpotifyTrack(trimmed);
     if (resolved) {
       return { query: resolved, isUrl: false };
@@ -765,6 +738,93 @@ export const playCommand = {
           }
           return;
         }
+      }
+    }
+
+    // Handle Spotify Playlist or Album URL
+    if (isSpotifyPlaylistOrAlbum(rawQuery)) {
+      await interaction.editReply(`🔍 **Fetching Spotify collection...**`);
+      const collection = await resolveSpotifyCollection(rawQuery);
+      if (!collection || collection.tracks.length === 0) {
+        await interaction.editReply(`❌ Could not load Spotify playlist/album. Please ensure the link is public.`);
+        autoDeleteReply(interaction, 10000);
+        return;
+      }
+
+      purgeAutoplayTracks(player);
+
+      let queuedCount = 0;
+      let firstTrackStarted = false;
+
+      const initialEmbed = new EmbedBuilder()
+        .setColor(0x1db954)
+        .setTitle(`🎶 Spotify ${collection.type === "album" ? "Album" : "Playlist"} Queued`)
+        .setDescription(`Resolving **${collection.tracks.length}** tracks from **${collection.title}** to studio audio streams...`)
+        .addFields([
+          { name: "Collection", value: collection.title, inline: true },
+          { name: "Total Tracks", value: `${collection.tracks.length}`, inline: true },
+          { name: "Source Fidelity", value: "🟢 Spotify -> 256kbps HQ Stream", inline: true },
+        ]);
+      if (collection.thumbnail) initialEmbed.setThumbnail(collection.thumbnail);
+      await interaction.editReply({ embeds: [initialEmbed] });
+
+      const BATCH_SIZE = 5;
+      for (let i = 0; i < collection.tracks.length; i += BATCH_SIZE) {
+        const batch = collection.tracks.slice(i, i + BATCH_SIZE);
+        const resolved = await Promise.all(
+          batch.map(async (t) => {
+            try {
+              const query = `${t.title} ${t.artist}`.trim();
+              const trackRes = await smartSearch(player, query, false, interaction.user);
+              if (trackRes?.tracks?.length) {
+                const trk = trackRes.tracks[0];
+                trk.requester = interaction.user;
+                trk.userData = {
+                  ...(trk.userData || {}),
+                  command: "/play",
+                  spotifyTitle: t.title,
+                  spotifyArtist: t.artist,
+                };
+                return trk;
+              }
+            } catch {}
+            return null;
+          })
+        );
+
+        for (const trk of resolved) {
+          if (trk) {
+            await player.queue.add(trk);
+            queuedCount++;
+            if (!firstTrackStarted && !player.playing && !player.paused) {
+              firstTrackStarted = true;
+              await player.play();
+            }
+          }
+        }
+      }
+
+      if (queuedCount > 0) {
+        if (!firstTrackStarted && !player.playing && !player.paused) await player.play();
+        else await updateActivePlayerMessage(player);
+
+        const finalEmbed = new EmbedBuilder()
+          .setColor(0x1db954)
+          .setTitle(`🎶 Spotify ${collection.type === "album" ? "Album" : "Playlist"} Queued`)
+          .setDescription(`Added **${queuedCount}** tracks from **${collection.title}**`)
+          .addFields([
+            { name: "Collection", value: collection.title, inline: true },
+            { name: "Tracks Queued", value: `${queuedCount}/${collection.tracks.length}`, inline: true },
+            { name: "Fidelity", value: "🟢 Studio Quality Audio", inline: true },
+          ]);
+        if (collection.thumbnail) finalEmbed.setThumbnail(collection.thumbnail);
+        await interaction.editReply({ embeds: [finalEmbed] });
+        autoDeleteReply(interaction, 12000);
+        return;
+      } else {
+        await interaction.editReply(`❌ Could not resolve audio for tracks in Spotify ${collection.type}.`);
+        autoDeleteReply(interaction, 10000);
+        return;
       }
     }
 

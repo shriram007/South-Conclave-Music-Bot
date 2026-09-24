@@ -97,6 +97,42 @@ export function patchPlayerPrototypePlay(): void {
     }
 
     if (targetTrack && this.node) {
+      // 1. Resolve Spotify tracks to a real audio stream if current node does not support native Spotify playback
+      const isSpotify = targetTrack.info?.sourceName === "spotify" || (targetTrack.userData as any)?.sourceName === "spotify";
+      const hasSpotifySupport = (this.node as any).info?.sourceManagers?.includes("spotify");
+      if (isSpotify && !hasSpotifySupport && this.node.connected && isNodeHealthy(this.node.id)) {
+        console.log(`[Player Safety] Track "${targetTrack.info?.title}" is a Spotify track not supported by node "${this.node.id}". Resolving audio stream...`);
+        const query = `${targetTrack.info.title} ${targetTrack.info.author || ""}`.trim();
+        try {
+          const timeoutPromise = new Promise<null>((r) => setTimeout(() => r(null), 3500));
+          const searchRes: any = await Promise.race([
+            this.node.search({ query, source: "ytmsearch" }, targetTrack.requester),
+            timeoutPromise,
+          ]);
+          if (searchRes?.tracks?.length) {
+            const streamable = searchRes.tracks[0];
+            targetTrack.encoded = streamable.encoded;
+            targetTrack.info = {
+              ...streamable.info,
+              title: targetTrack.info.title || streamable.info.title,
+              author: targetTrack.info.author || streamable.info.author,
+              artworkUrl: targetTrack.info.artworkUrl || streamable.info.artworkUrl,
+            };
+            if (options?.clientTrack) {
+              options.clientTrack.encoded = streamable.encoded;
+              options.clientTrack.info = targetTrack.info;
+            }
+            if (options?.track) {
+              options.track.encoded = streamable.encoded;
+            }
+            (targetTrack.userData as any).nodeId = this.node.id;
+            (targetTrack.userData as any).convertedFromSpotify = true;
+          }
+        } catch (e) {
+          console.warn("[Player Safety] Failed to resolve audio for Spotify track:", e);
+        }
+      }
+
       const trackNodeId = (targetTrack.userData as any)?.nodeId;
       if (trackNodeId && trackNodeId !== this.node.id) {
         const nodeManager = (this as any).LavalinkManager?.nodeManager || lavalink?.nodeManager;

@@ -6,6 +6,7 @@ import { buildPlayerMessage } from '../dist/lavalink/playerUI.js';
 import { resolveRecoveryTrack } from '../dist/services/recovery.js';
 import { playCommand, resolveTrackQuery, smartSearch } from '../dist/commands/play.js';
 import { findAutoplayRecommendation, initLavalink } from '../dist/lavalink/client.js';
+import { isSpotifyUrl, isSpotifyPlaylistOrAlbum, isSpotifyTrackUrl } from '../dist/services/spotify.js';
 import CryptoJS from 'crypto-js';
 
 const info = (title = 'Anthaathi', identifier = '29WzIwFvVdg') => ({ title, identifier, author: 'Govind Vasantha', duration: 240000, sourceName: 'youtube', isSeekable: true, isStream: false, uri: `https://www.youtube.com/watch?v=${identifier}` });
@@ -522,5 +523,82 @@ test('cross-node track playback re-encodes bytecode natively for the active play
   // The track should have been re-encoded with custom node's native bytecode
   assert.equal(foreignTrack.encoded, 'custom-node-native-bytecode');
   assert.equal(foreignTrack.userData.nodeId, 'Primary-CustomNode');
+});
+
+test('Spotify URL patterns correctly identify tracks, playlists, and albums', () => {
+  const playlistUrl = 'https://open.spotify.com/playlist/5tZIlJFpxLTJkZjBfDyww6?si=aadac971eb304239';
+  const albumUrl = 'https://open.spotify.com/album/4m2880jivSbbyEGAKfITCa';
+  const trackUrl = 'https://open.spotify.com/track/11dFghVXANMlKmJXsNCbNl?si=123';
+  const uriPlaylist = 'spotify:playlist:5tZIlJFpxLTJkZjBfDyww6';
+
+  assert.equal(isSpotifyUrl(playlistUrl), true);
+  assert.equal(isSpotifyUrl(albumUrl), true);
+  assert.equal(isSpotifyUrl(trackUrl), true);
+  assert.equal(isSpotifyUrl(uriPlaylist), true);
+  assert.equal(isSpotifyUrl('https://music.youtube.com/watch?v=123'), false);
+
+  assert.equal(isSpotifyPlaylistOrAlbum(playlistUrl), true);
+  assert.equal(isSpotifyPlaylistOrAlbum(albumUrl), true);
+  assert.equal(isSpotifyPlaylistOrAlbum(trackUrl), false);
+
+  assert.equal(isSpotifyTrackUrl(trackUrl), true);
+  assert.equal(isSpotifyTrackUrl(playlistUrl), false);
+  assert.equal(isSpotifyTrackUrl(albumUrl), false);
+});
+
+test('Spotify tracks auto-convert to playable audio when active node lacks native spotify support', async () => {
+  const { Player, LavalinkManager } = await import('lavalink-client');
+  const manager = new LavalinkManager({ nodes: [], sendToShard: () => {} });
+
+  const customNode = {
+    id: 'Primary-CustomNode',
+    options: { id: 'Primary-CustomNode' },
+    connected: true,
+    info: { sourceManagers: ['youtube', 'soundcloud'] }, // no spotify!
+    search: async (query) => {
+      return {
+        tracks: [{
+          encoded: 'ytm-audio-stream',
+          info: { title: 'Buriki No Dance', author: 'Ado', sourceName: 'youtube' },
+          userData: {},
+        }],
+      };
+    },
+    updatePlayer: async (opts) => opts,
+  };
+
+  const spotifyTrack = {
+    encoded: 'raw-spotify-payload',
+    info: {
+      title: 'Buriki No Dance',
+      author: 'Ado',
+      sourceName: 'spotify',
+      uri: 'https://open.spotify.com/track/xyz',
+    },
+    userData: {},
+  };
+
+  const mockPlayer = {
+    guildId: 'test-guild-spotify',
+    node: customNode,
+    LavalinkManager: manager,
+    ping: { lavalink: 0 },
+    queue: {
+      current: spotifyTrack,
+      tracks: [],
+      utils: { save() {} },
+    },
+    getData: () => null,
+    setData: () => {},
+    _emitDebugEvent: () => {},
+    changeNode: async () => {},
+  };
+
+  await Player.prototype.play.call(mockPlayer);
+
+  // The spotify track should have been converted to the node's native ytm audio stream
+  assert.equal(spotifyTrack.encoded, 'ytm-audio-stream');
+  assert.equal(spotifyTrack.info.sourceName, 'youtube');
+  assert.equal(spotifyTrack.userData.convertedFromSpotify, true);
 });
 

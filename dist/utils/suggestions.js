@@ -21,7 +21,7 @@ async function getSpotifyToken() {
                 "Content-Type": "application/x-www-form-urlencoded",
             },
             body: "grant_type=client_credentials",
-            signal: AbortSignal.timeout(600),
+            signal: AbortSignal.timeout(5000),
         });
         if (resp.ok) {
             const data = (await resp.json());
