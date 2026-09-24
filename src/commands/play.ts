@@ -72,6 +72,19 @@ export async function resolveTrackQuery(rawQuery: string): Promise<{ query: stri
     trimmed = `https://www.youtube.com/watch?v=${videoId}`;
   }
 
+  // Handle YouTube artist/channel handle URLs: e.g. https://music.youtube.com/@beachweather?si=...
+  // or https://www.youtube.com/@beachweather or /c/ or /user/
+  const ytHandleMatch = trimmed.match(/^https?:\/\/(?:music\.|www\.)?youtube\.com\/@([a-zA-Z0-9_.-]+)/i);
+  if (ytHandleMatch && ytHandleMatch[1]) {
+    const artistName = decodeURIComponent(ytHandleMatch[1]).replace(/[-_.]+/g, " ").trim();
+    return { query: `${artistName} songs`, isUrl: false };
+  }
+  const ytCustomMatch = trimmed.match(/^https?:\/\/(?:music\.|www\.)?youtube\.com\/(?:c|user)\/([a-zA-Z0-9_.-]+)/i);
+  if (ytCustomMatch && ytCustomMatch[1]) {
+    const artistName = decodeURIComponent(ytCustomMatch[1]).replace(/[-_.]+/g, " ").trim();
+    return { query: `${artistName} songs`, isUrl: false };
+  }
+
   // If Spotify track link: resolve track title & artist for 100% stable YouTube Music HQ audio stream
   if (/^https?:\/\/open\.spotify\.com\/track\//i.test(trimmed)) {
     const resolved = await resolveSpotifyTrack(trimmed);
@@ -187,10 +200,24 @@ export async function smartSearch(
       }
     }
 
+    const safeNodeSearchUrl = async (targetNode: any) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          targetNode.search({ query }, user),
+          new Promise<null>((r) => { timer = setTimeout(() => r(null), 4000); }),
+        ]);
+      } catch {
+        return null;
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
     // 1. Try resolving on current player node if healthy
     if (player.node?.connected && isNodeHealthy(player.node.id)) {
       try {
-        const directRes = await player.search({ query }, user);
+        const directRes = await safeNodeSearchUrl(player.node);
         if (directRes?.tracks?.length && directRes.loadType !== "empty" && directRes.loadType !== "error") {
           return directRes;
         }
@@ -213,7 +240,7 @@ export async function smartSearch(
 
     for (const node of healthyOthers) {
       try {
-        const nodeRes = await node.search({ query }, user);
+        const nodeRes = await safeNodeSearchUrl(node);
         if (nodeRes?.tracks?.length && nodeRes.loadType !== "empty" && nodeRes.loadType !== "error") {
           console.log(`[SmartSearch] URL resolved on healthy node "${node.id}". Migrating player to stream...`);
           if (!player.playing && !player.paused && typeof player.changeNode === "function") await player.changeNode(node, false);
@@ -226,7 +253,7 @@ export async function smartSearch(
     const remaining = connectedNodes.filter((n: any) => n.id !== player.node?.id && !healthyOthers.includes(n));
     for (const node of remaining) {
       try {
-        const nodeRes = await node.search({ query }, user);
+        const nodeRes = await safeNodeSearchUrl(node);
         if (nodeRes?.tracks?.length && nodeRes.loadType !== "empty" && nodeRes.loadType !== "error") {
           if (!player.playing && !player.paused && typeof player.changeNode === "function") await player.changeNode(node, false);
           return nodeRes;
@@ -268,9 +295,25 @@ export async function smartSearch(
 
   const executeSearchWithTimeout = async (node: any, searchOpts: any, timeoutMs: number = 3500) => {
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let didTimeout = false;
     try {
-      return await Promise.race([node.search(searchOpts, user), new Promise<null>(r => { timer = setTimeout(() => r(null), timeoutMs); })]);
-    } finally { clearTimeout(timer); }
+      const res = await Promise.race([
+        node.search(searchOpts, user),
+        new Promise<null>((r) => {
+          timer = setTimeout(() => {
+            didTimeout = true;
+            r(null);
+          }, timeoutMs);
+        }),
+      ]);
+      if (didTimeout && node?.id) {
+        console.warn(`[SmartSearch] Search timed out after ${timeoutMs}ms on node "${node.id}". Marking degraded for 60s.`);
+        markNodeDegraded(node.id, 60000);
+      }
+      return res;
+    } finally {
+      clearTimeout(timer);
+    }
   };
 
   const handleSearchError = (node: any, e: any, label: string) => {
@@ -286,7 +329,8 @@ export async function smartSearch(
       errMsg.includes("This network flagged") ||
       errMsg.includes("ConnectTimeoutError") ||
       errMsg.includes("fetch failed") ||
-      errMsg.includes("timeout")
+      errMsg.includes("timeout") ||
+      errMsg.includes("ECONNREFUSED")
     ) {
       markNodeDegraded(node.id);
     }
@@ -453,6 +497,11 @@ export const playCommand = {
       if (videoId) {
         const value = `https://www.youtube.com/watch?v=${videoId}`;
         return interaction.respond([{ name: "🔗 Play this exact YouTube video", value }]).catch(() => {});
+      }
+      const handleMatch = trimmed.match(/^https?:\/\/(?:music\.|www\.)?youtube\.com\/@([a-zA-Z0-9_.-]+)/i);
+      if (handleMatch && handleMatch[1]) {
+        const artistName = decodeURIComponent(handleMatch[1]).replace(/[-_.]+/g, " ").trim();
+        return interaction.respond([{ name: `🎵 Search top tracks for @${handleMatch[1]}`, value: `${artistName} songs` }]).catch(() => {});
       }
       return interaction.respond([]).catch(() => {});
     }

@@ -563,9 +563,8 @@ export function getMasterNodeConfigs(): LavalinkNodeOptions[] {
   if (!config.lavalink.publicFallbacks) return configs;
 
   // =========================================================================
-  // PUBLIC FALLBACK NODES (Kept for reference / backup - uncomment to re-enable)
+  // PUBLIC FALLBACK NODES
   // =========================================================================
-  /*
   // Priority 1: Kasawa-MasterNode (verified online, supports direct HTTP 320k JioSaavn streaming, YT, Spotify, SoundCloud)
   configs.push(
     {
@@ -605,7 +604,6 @@ export function getMasterNodeConfigs(): LavalinkNodeOptions[] {
       enablePingOnStatsCheck: true,
     }
   );
-  */
 
   return configs;
 }

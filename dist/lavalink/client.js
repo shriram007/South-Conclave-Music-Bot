@@ -500,12 +500,10 @@ export function getMasterNodeConfigs() {
     if (!config.lavalink.publicFallbacks)
         return configs;
     // =========================================================================
-    // PUBLIC FALLBACK NODES (Kept for reference / backup - uncomment to re-enable)
+    // PUBLIC FALLBACK NODES
     // =========================================================================
-    /*
     // Priority 1: Kasawa-MasterNode (verified online, supports direct HTTP 320k JioSaavn streaming, YT, Spotify, SoundCloud)
-    configs.push(
-      {
+    configs.push({
         authorization: "youshallnotpass",
         host: "lava2.kasawa.pro",
         port: 2334,
@@ -516,8 +514,7 @@ export function getMasterNodeConfigs() {
         retryTimespan: 180000,
         requestSignalTimeoutMS: 7000,
         enablePingOnStatsCheck: true,
-      },
-      {
+    }, {
         authorization: "https://discord.gg/mjS5J2K3ep",
         host: "lava-v4.millohost.my.id",
         port: 443,
@@ -528,8 +525,7 @@ export function getMasterNodeConfigs() {
         retryTimespan: 180000,
         requestSignalTimeoutMS: 7000,
         enablePingOnStatsCheck: true,
-      },
-      {
+    }, {
         authorization: "https://seretia.link/discord",
         host: "lavalinkv4.serenetia.com",
         port: 443,
@@ -540,9 +536,7 @@ export function getMasterNodeConfigs() {
         retryTimespan: 180000,
         requestSignalTimeoutMS: 7000,
         enablePingOnStatsCheck: true,
-      }
-    );
-    */
+    });
     return configs;
 }
 let watchdogInterval = null;

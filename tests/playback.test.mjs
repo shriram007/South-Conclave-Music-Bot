@@ -20,6 +20,22 @@ test('YouTube link forms resolve one exact ID, including watch links with playli
   assert.equal(youtubeVideoId('https://youtube.com/playlist?list=PLabc'), null);
 });
 
+test('YouTube artist/channel handle links resolve to artist songs query', async () => {
+  const handleUrl = 'https://music.youtube.com/@beachweather?si=XJisST2gAQ6SqiEZ';
+  assert.deepEqual(await resolveTrackQuery(handleUrl), { query: 'beachweather songs', isUrl: false });
+
+  let choices;
+  await playCommand.autocomplete({
+    options: { getFocused: () => handleUrl },
+    user: { id: 'test-user', username: 'Tester' },
+    respond: async value => { choices = value; },
+  });
+  assert.deepEqual(choices, [{
+    name: '🎵 Search top tracks for @beachweather',
+    value: 'beachweather songs',
+  }]);
+});
+
 test('/play URL autocomplete offers the exact canonical YouTube Music video', async () => {
   let choices;
   await playCommand.autocomplete({
