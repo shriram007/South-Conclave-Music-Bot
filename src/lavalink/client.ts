@@ -78,6 +78,106 @@ export function isNodeHealthy(nodeId: string): boolean {
 }
 
 /**
+ * Intercepts Player.prototype.play to guarantee cross-node bytecode compatibility.
+ * If a track was resolved on Node A (e.g. Kasawa) and player is currently on Node B (e.g. Custom Node),
+ * this hook ensures the track is re-encoded natively for Node B, or migrates the player to Node A,
+ * preventing Lavalink 500 "Failed to decode track due to a mismatching version or missing source manager".
+ */
+const originalPlayerPlay = (Player.prototype as any).play;
+let playPatched = false;
+
+export function patchPlayerPrototypePlay(): void {
+  if (playPatched) return;
+  playPatched = true;
+
+  (Player.prototype as any).play = async function (this: Player, options: any = {}) {
+    let targetTrack: any = options?.clientTrack || options?.track || this.queue.current || this.queue.tracks[0];
+    if (!this.queue.current && this.queue.tracks.length) {
+      targetTrack = this.queue.tracks[0];
+    }
+
+    if (targetTrack && this.node) {
+      const trackNodeId = (targetTrack.userData as any)?.nodeId;
+      if (trackNodeId && trackNodeId !== this.node.id) {
+        const nodeManager = (this as any).LavalinkManager?.nodeManager || lavalink?.nodeManager;
+        const resolvingNode = nodeManager?.nodes?.get(trackNodeId);
+        let reResolved = false;
+
+        // Attempt re-resolving URI on current node to get native bytecode
+        const searchUri = targetTrack.info?.uri || (targetTrack.info?.identifier ? (targetTrack.info?.sourceName === "youtube" ? `https://www.youtube.com/watch?v=${targetTrack.info.identifier}` : targetTrack.info.identifier) : null);
+        if (searchUri && this.node.connected && isNodeHealthy(this.node.id)) {
+          try {
+            const timeoutPromise = new Promise<null>((r) => setTimeout(() => r(null), 2500));
+            const localRes: any = await Promise.race([
+              this.node.search({ query: searchUri }, targetTrack.requester),
+              timeoutPromise,
+            ]);
+            if (localRes?.tracks?.length) {
+              const native = localRes.tracks[0];
+              targetTrack.encoded = native.encoded;
+              if (options?.clientTrack) options.clientTrack.encoded = native.encoded;
+              if (options?.track) options.track.encoded = native.encoded;
+              (targetTrack.userData as any).nodeId = this.node.id;
+              reResolved = true;
+            }
+          } catch {}
+        }
+
+        // If local re-resolve failed or timed out, migrate player to the resolving node
+        if (!reResolved && resolvingNode?.connected && isNodeHealthy(resolvingNode.id)) {
+          console.log(`[Player Node Sync] Migrating player from ${this.node.id} to ${resolvingNode.id} for "${targetTrack.info?.title}"`);
+          await this.changeNode(resolvingNode, false);
+        }
+      }
+    }
+
+    try {
+      return await originalPlayerPlay.call(this, options);
+    } catch (err: any) {
+      const errMsg = err?.message || String(err);
+      if (
+        errMsg.includes("Failed to decode track") ||
+        errMsg.includes("mismatching version") ||
+        errMsg.includes("missing source manager")
+      ) {
+        console.warn(`[Player Node Sync] Track decode mismatch on node "${this.node?.id}": ${errMsg}. Attempting alternate node recovery...`);
+        const currentTrack = this.queue.current || targetTrack;
+        const searchUri = currentTrack?.info?.uri || (currentTrack?.info?.identifier ? `https://www.youtube.com/watch?v=${currentTrack.info.identifier}` : null);
+        const nodeManager = (this as any).LavalinkManager?.nodeManager || lavalink?.nodeManager;
+        if (searchUri && nodeManager?.nodes) {
+          const altNodes = Array.from(nodeManager.nodes.values())
+            .filter((n: any) => n.connected && n.id !== this.node?.id && isNodeHealthy(n.id));
+          for (const altNode of altNodes) {
+            try {
+              const res: any = await Promise.race([
+                (altNode as any).search({ query: searchUri }, currentTrack?.requester),
+                new Promise<null>((r) => setTimeout(() => r(null), 3000)),
+              ]);
+              if (res?.tracks?.length) {
+                const freshTrack = res.tracks[0];
+                freshTrack.userData = { ...(currentTrack.userData || {}), nodeId: (altNode as any).id };
+                freshTrack.requester = currentTrack.requester;
+                await this.changeNode(altNode as any, false);
+                if (this.queue.current) this.queue.current = freshTrack;
+                return await originalPlayerPlay.call(this, {
+                  ...options,
+                  clientTrack: freshTrack,
+                  track: undefined,
+                });
+              }
+            } catch {}
+          }
+        }
+      }
+      throw err;
+    }
+  };
+}
+
+// Auto-activate cross-node player compatibility hook
+patchPlayerPrototypePlay();
+
+/**
  * Disables DSP filters and EQ. Discord output may still be transcoded by the node.
  */
 export async function clearAllFilters(player: Player): Promise<void> {
@@ -191,13 +291,15 @@ async function discoverAutoplayRecommendation(player: Player, seedTrack: Track):
   const otherHealthy = healthyNodes.filter((n: any) => n.id !== "Primary-CustomNode" && n.id !== "Kasawa-MasterNode" && n.id !== "Millo-BackupNode" && n.id !== "Serenetia-AuxNode");
   const degradedList = connectedNodes.filter((n: any) => !isNodeHealthy(n.id));
 
-  // Priority: Custom Primary Node > Kasawa > Millo > Serenetia
+  // Priority: Player's current node (if healthy) > Custom Primary Node > Kasawa > Millo > Serenetia
+  const playerNodeIfHealthy = (player.node?.connected && isNodeHealthy(player.node.id)) ? [player.node] : [];
   const nodesToTry = healthyNodes.length > 0 ? [
-    ...(customNode ? [customNode] : []),
-    ...(kasawaNode ? [kasawaNode] : []),
-    ...(milloNode ? [milloNode] : []),
-    ...(serenetiaNode ? [serenetiaNode] : []),
-    ...otherHealthy,
+    ...playerNodeIfHealthy,
+    ...(customNode && customNode.id !== player.node?.id ? [customNode] : []),
+    ...(kasawaNode && kasawaNode.id !== player.node?.id ? [kasawaNode] : []),
+    ...(milloNode && milloNode.id !== player.node?.id ? [milloNode] : []),
+    ...(serenetiaNode && serenetiaNode.id !== player.node?.id ? [serenetiaNode] : []),
+    ...otherHealthy.filter((n: any) => n.id !== player.node?.id),
   ] : degradedList;
 
   const historyIds = new Set(player.queue.previous.map((t) => t.info.identifier).filter((id): id is string => Boolean(id)));
@@ -288,6 +390,7 @@ async function discoverAutoplayRecommendation(player: Player, seedTrack: Track):
             const candidate: Track | undefined = candidatePool[0];
 
             if (candidate) {
+              candidate.userData = { ...(candidate.userData || {}), nodeId: node.id };
               foundCandidate = candidate;
               break;
             }
@@ -344,6 +447,7 @@ async function discoverAutoplayRecommendation(player: Player, seedTrack: Track):
                 isLanguageCompatible(seedLang, detectTrackLanguage(t.info.title, t.info.author || ""))
             );
             if (candidate) {
+              candidate.userData = { ...(candidate.userData || {}), nodeId: node.id };
               foundCandidate = candidate;
               break;
             }
@@ -370,9 +474,10 @@ async function discoverAutoplayRecommendation(player: Player, seedTrack: Track):
             player.node,
             ...nodesToTry,
           ]);
-          if (jioCandidate) {
+          if (jioCandidate?.track) {
+            jioCandidate.track.userData = { ...(jioCandidate.track.userData || {}), nodeId: jioCandidate.node?.id };
             foundCandidate = jioCandidate.track;
-            console.log(`[Smart Autoplay] JioSaavn 320kbps discovery candidate: "${foundCandidate?.info?.title}" by "${foundCandidate?.info?.author}"`);
+            console.log(`[Smart Autoplay] JioSaavn 320kbps discovery candidate: "${jioCandidate.track.info?.title}" by "${jioCandidate.track.info?.author}"`);
           }
         }
       }
@@ -406,6 +511,7 @@ async function discoverAutoplayRecommendation(player: Player, seedTrack: Track):
                 (t.info.duration || 0) <= 900000
               );
               if (candidate) {
+                candidate.userData = { ...(candidate.userData || {}), nodeId: node.id };
                 foundCandidate = candidate;
                 console.log(`[Smart Autoplay] SoundCloud discovery candidate: "${foundCandidate?.info?.title}" by "${foundCandidate?.info?.author}"`);
                 break;
@@ -455,7 +561,7 @@ async function discoverAutoplayRecommendation(player: Player, seedTrack: Track):
   //   2. YouTube playback is known-broken (upgrade would just fail later)
   let studioMasterTrack: Track = selectedCandidate;
   const isJio = Boolean((selectedCandidate as any).userData?.isJioSaavn);
-  const hqSearchNode = kasawaNode || milloNode || nodesToTry[0];
+  const hqSearchNode = (player.node?.connected && isNodeHealthy(player.node.id)) ? player.node : (customNode || kasawaNode || milloNode || nodesToTry[0]);
   if (!isJio && ytHealthy && hqSearchNode) {
     try {
       const parsedCandidate = parseTrackTitle(selectedCandidate.info.title || "", selectedCandidate.info.author || "");
@@ -470,12 +576,27 @@ async function discoverAutoplayRecommendation(player: Player, seedTrack: Track):
       const candidateMaster = masters[0];
       if (candidateMaster && authorConfidence(candidateMaster.info.author) >= authorConfidence(selectedCandidate.info.author)) {
         studioMasterTrack = candidateMaster;
-        studioMasterTrack.userData = { ...studioMasterTrack.userData, searchSource: "ytmsearch" };
+        studioMasterTrack.userData = { ...studioMasterTrack.userData, searchSource: "ytmsearch", nodeId: hqSearchNode.id };
         console.log(`[Smart Autoplay] Matched catalog recording: "${candidateMaster.info.title}" by "${candidateMaster.info.author}"`);
       }
 
     } catch (e) {
       console.warn("[Smart Autoplay] Studio master upgrade notice:", e);
+    }
+  }
+
+  // If studioMasterTrack was resolved on an alternate node, ensure it is decodable on player.node
+  if (player.node?.connected && isNodeHealthy(player.node.id) && (studioMasterTrack as any).userData?.nodeId !== player.node.id) {
+    const uriToSearch = studioMasterTrack.info?.uri || (studioMasterTrack.info?.identifier ? `https://www.youtube.com/watch?v=${studioMasterTrack.info.identifier}` : null);
+    if (uriToSearch) {
+      try {
+        const localRes: any = await withTimeout(player.node.search({ query: uriToSearch }, seedTrack.requester), 2500);
+        if (localRes?.tracks?.length) {
+          const native = localRes.tracks[0];
+          native.userData = { ...(studioMasterTrack.userData || {}), ...(native.userData || {}), nodeId: player.node.id };
+          studioMasterTrack = native;
+        }
+      } catch {}
     }
   }
 
@@ -1028,6 +1149,7 @@ export function initLavalink(client: Client) {
         isAutoplay: (failedTrack.userData as any)?.isAutoplay,
         recoveredFromVideoId: (failedTrack.userData as any)?.requestedVideoId,
         recoveredFromUri: (failedTrack.userData as any)?.requestedUri,
+        nodeId: targetNode.id,
         ...recoveredTrack.userData,
         requestedVideoId: undefined,
         requestedUri: undefined,
@@ -1037,6 +1159,7 @@ export function initLavalink(client: Client) {
         isAutoplay: (failedTrack.userData as any)?.isAutoplay,
         requestedVideoId: (failedTrack.userData as any)?.requestedVideoId,
         requestedUri: (failedTrack.userData as any)?.requestedUri,
+        nodeId: targetNode.id,
         ...recoveredTrack.userData,
         recoveryAttempts: Number((failedTrack.userData as any)?.recoveryAttempts || 0) + 1,
       };

@@ -1,5 +1,5 @@
 import { youtubeVideoId } from "../utils/playback.js";
-import { rankSearchTracks } from "../utils/trackSelection.js";
+import { rankSearchTracks, sameRecording } from "../utils/trackSelection.js";
 import { EmbedBuilder, SlashCommandBuilder, } from "discord.js";
 import { getBestNode, getOrCreatePlayer, isNodeHealthy, isYouTubePlaybackHealthy, lavalink, markNodeDegraded, purgeAutoplayTracks, restrictedTrackIds, updateActivePlayerMessage } from "../lavalink/client.js";
 import { autoDeleteReply } from "../utils/cleanup.js";
@@ -101,6 +101,69 @@ export async function resolveTrackQuery(rawQuery) {
  * 4. Tries clean YouTube audio streams (filtering out video/age-gated tags)
  */
 export async function smartSearch(player, query, isUrl, user) {
+    // Helper to ensure player is assigned to the healthy resolving node
+    const syncPlayerNode = async (targetNode) => {
+        if (typeof player.changeNode === "function" && !player.playing && !player.paused && player.node && player.node.id !== targetNode.id) {
+            console.log(`[SmartSearch] Migrating player from degraded ${player.node.id} to healthy search node ${targetNode.id}...`);
+            await player.changeNode(targetNode, false);
+        }
+    };
+    const executeSearchWithTimeout = async (node, searchOpts, timeoutMs = 3500) => {
+        let timer;
+        let didTimeout = false;
+        try {
+            const res = await Promise.race([
+                node.search(searchOpts, user),
+                new Promise((r) => {
+                    timer = setTimeout(() => {
+                        didTimeout = true;
+                        r(null);
+                    }, timeoutMs);
+                }),
+            ]);
+            if (didTimeout && node?.id) {
+                console.warn(`[SmartSearch] Search timed out after ${timeoutMs}ms on node "${node.id}". Marking degraded for 60s.`);
+                markNodeDegraded(node.id, 60000);
+            }
+            return res;
+        }
+        finally {
+            clearTimeout(timer);
+        }
+    };
+    const ensureTrackDecodableForPlayer = async (tracks, resolvingNode) => {
+        if (!tracks || tracks.length === 0)
+            return tracks;
+        for (const t of tracks) {
+            if (t)
+                t.userData = { ...(t.userData || {}), nodeId: resolvingNode?.id };
+        }
+        if (!player.node?.connected || !isNodeHealthy(player.node.id) || player.node.id === resolvingNode?.id) {
+            return tracks;
+        }
+        // Re-resolve top track on player.node so it gets player.node's exact native bytecode
+        try {
+            const top = tracks[0];
+            const exactVideoId = top.userData?.requestedVideoId || youtubeVideoId(top.info?.identifier || top.info?.uri || "");
+            const uriToSearch = top.info?.uri || (top.info?.identifier ? `https://www.youtube.com/watch?v=${top.info.identifier}` : null);
+            if (uriToSearch) {
+                const local = await executeSearchWithTimeout(player.node, { query: uriToSearch }, 2500);
+                if (local?.tracks?.length) {
+                    const native = exactVideoId
+                        ? local.tracks.find((t) => t.info?.identifier === exactVideoId)
+                        : local.tracks.find((t) => sameRecording(t.info, top.info));
+                    if (native) {
+                        native.userData = { ...(top.userData || {}), ...(native.userData || {}), nodeId: player.node.id };
+                        native.requester = user;
+                        return [native, ...tracks.slice(1)];
+                    }
+                }
+            }
+        }
+        catch { }
+        await syncPlayerNode(resolvingNode);
+        return tracks;
+    };
     if (isUrl) {
         const exactVideoId = youtubeVideoId(query);
         if (exactVideoId) {
@@ -120,7 +183,7 @@ export async function smartSearch(player, query, isUrl, user) {
                     }
                     if (!exact)
                         continue;
-                    exact.userData = { ...exact.userData, requestedVideoId: exactVideoId, requestedUri: query };
+                    exact.userData = { ...exact.userData, requestedVideoId: exactVideoId, requestedUri: query, nodeId: node.id };
                     return { ...res, loadType: "track", tracks: [exact] };
                 }
                 catch (error) {
@@ -156,6 +219,7 @@ export async function smartSearch(player, query, isUrl, user) {
                     if (jioResult.type === "track") {
                         const converted = await loadJioSaavnAsLavalinkTrack(jioResult.track, user, candidateNodes);
                         if (converted) {
+                            converted.track.userData = { ...(converted.track.userData || {}), nodeId: converted.node.id };
                             if (player.node && player.node.id !== converted.node.id && !player.playing) {
                                 await player.changeNode(converted.node, false);
                             }
@@ -166,8 +230,10 @@ export async function smartSearch(player, query, isUrl, user) {
                         const convertedTracks = [];
                         for (const t of jioResult.tracks) {
                             const conv = await loadJioSaavnAsLavalinkTrack(t, user, candidateNodes);
-                            if (conv)
+                            if (conv) {
+                                conv.track.userData = { ...(conv.track.userData || {}), nodeId: conv.node.id };
                                 convertedTracks.push(conv.track);
+                            }
                         }
                         if (convertedTracks.length > 0) {
                             return {
@@ -207,6 +273,10 @@ export async function smartSearch(player, query, isUrl, user) {
             try {
                 const directRes = await safeNodeSearchUrl(player.node);
                 if (directRes?.tracks?.length && directRes.loadType !== "empty" && directRes.loadType !== "error") {
+                    for (const t of directRes.tracks) {
+                        if (t)
+                            t.userData = { ...(t.userData || {}), nodeId: player.node.id };
+                    }
                     return directRes;
                 }
             }
@@ -236,9 +306,9 @@ export async function smartSearch(player, query, isUrl, user) {
                 const nodeRes = await safeNodeSearchUrl(node);
                 if (nodeRes?.tracks?.length && nodeRes.loadType !== "empty" && nodeRes.loadType !== "error") {
                     console.log(`[SmartSearch] URL resolved on healthy node "${node.id}". Migrating player to stream...`);
-                    if (!player.playing && !player.paused && typeof player.changeNode === "function")
-                        await player.changeNode(node, false);
-                    return nodeRes;
+                    await syncPlayerNode(node);
+                    const safeTracks = await ensureTrackDecodableForPlayer(nodeRes.tracks, node);
+                    return { ...nodeRes, tracks: safeTracks };
                 }
             }
             catch { }
@@ -249,9 +319,9 @@ export async function smartSearch(player, query, isUrl, user) {
             try {
                 const nodeRes = await safeNodeSearchUrl(node);
                 if (nodeRes?.tracks?.length && nodeRes.loadType !== "empty" && nodeRes.loadType !== "error") {
-                    if (!player.playing && !player.paused && typeof player.changeNode === "function")
-                        await player.changeNode(node, false);
-                    return nodeRes;
+                    await syncPlayerNode(node);
+                    const safeTracks = await ensureTrackDecodableForPlayer(nodeRes.tracks, node);
+                    return { ...nodeRes, tracks: safeTracks };
                 }
             }
             catch { }
@@ -276,36 +346,6 @@ export async function smartSearch(player, query, isUrl, user) {
         ...(serenetiaNode && serenetiaNode.id !== player.node?.id ? [serenetiaNode] : []),
         ...otherHealthy.filter((n) => n.id !== player.node?.id),
     ] : degradedList;
-    // Helper to ensure player is assigned to the healthy resolving node
-    const syncPlayerNode = async (targetNode) => {
-        if (typeof player.changeNode === "function" && !player.playing && !player.paused && player.node && player.node.id !== targetNode.id) {
-            console.log(`[SmartSearch] Migrating player from degraded ${player.node.id} to healthy search node ${targetNode.id}...`);
-            await player.changeNode(targetNode, false);
-        }
-    };
-    const executeSearchWithTimeout = async (node, searchOpts, timeoutMs = 3500) => {
-        let timer;
-        let didTimeout = false;
-        try {
-            const res = await Promise.race([
-                node.search(searchOpts, user),
-                new Promise((r) => {
-                    timer = setTimeout(() => {
-                        didTimeout = true;
-                        r(null);
-                    }, timeoutMs);
-                }),
-            ]);
-            if (didTimeout && node?.id) {
-                console.warn(`[SmartSearch] Search timed out after ${timeoutMs}ms on node "${node.id}". Marking degraded for 60s.`);
-                markNodeDegraded(node.id, 60000);
-            }
-            return res;
-        }
-        finally {
-            clearTimeout(timer);
-        }
-    };
     const handleSearchError = (node, e, label) => {
         const errMsg = e?.message || String(e);
         if (errMsg.includes("Unexpected token '<'") ||
@@ -341,9 +381,11 @@ export async function smartSearch(player, query, isUrl, user) {
                     converted.track.userData = {
                         ...(converted.track.userData || {}),
                         command: "/play",
+                        nodeId: converted.node.id,
                     };
                     console.log(`[SmartSearch] Resolved "${query}" via JioSaavn 320kbps Studio Master on node "${converted.node.id}" (${reason})`);
-                    return { loadType: "track", tracks: [converted.track] };
+                    const safeTracks = await ensureTrackDecodableForPlayer([converted.track], converted.node);
+                    return { loadType: "track", tracks: safeTracks };
                 }
             }
         }
@@ -361,9 +403,9 @@ export async function smartSearch(player, query, isUrl, user) {
                     if (viable.length > 0) {
                         const relevant = rankSearchTracks(viable, query);
                         if (relevant.length > 0) {
-                            await syncPlayerNode(node);
-                            console.log(`[SmartSearch] Found "${relevant[0].info.title}" via scsearch on node "${node.id}" (${reason})`);
-                            return { ...res, tracks: relevant };
+                            const safeTracks = await ensureTrackDecodableForPlayer(relevant, node);
+                            console.log(`[SmartSearch] Found "${safeTracks[0].info.title}" via scsearch on node "${node.id}" (${reason})`);
+                            return { ...res, tracks: safeTracks };
                         }
                     }
                 }
@@ -395,11 +437,11 @@ export async function smartSearch(player, query, isUrl, user) {
                 if (viable.length > 0) {
                     const relevant = rankSearchTracks(viable, query);
                     if (relevant.length > 0) {
-                        await syncPlayerNode(node);
-                        console.log(`[SmartSearch] Found "${relevant[0].info.title}" via ytmsearch on node "${node.id}"`);
-                        for (const t of relevant)
+                        const safeTracks = await ensureTrackDecodableForPlayer(relevant, node);
+                        console.log(`[SmartSearch] Found "${safeTracks[0].info.title}" via ytmsearch on node "${node.id}"`);
+                        for (const t of safeTracks)
                             t.userData = { ...t.userData, searchSource: "ytmsearch" };
-                        return { ...res, tracks: relevant };
+                        return { ...res, tracks: safeTracks };
                     }
                 }
             }
@@ -423,9 +465,9 @@ export async function smartSearch(player, query, isUrl, user) {
                 if (viable.length > 0) {
                     const relevant = rankSearchTracks(viable, query);
                     if (relevant.length > 0) {
-                        await syncPlayerNode(node);
-                        console.log(`[SmartSearch] Found "${relevant[0].info.title}" via ytsearch (audio) on node "${node.id}"`);
-                        return { ...res, tracks: relevant };
+                        const safeTracks = await ensureTrackDecodableForPlayer(relevant, node);
+                        console.log(`[SmartSearch] Found "${safeTracks[0].info.title}" via ytsearch (audio) on node "${node.id}"`);
+                        return { ...res, tracks: safeTracks };
                     }
                 }
             }
@@ -443,9 +485,9 @@ export async function smartSearch(player, query, isUrl, user) {
                 if (viable.length > 0) {
                     const relevant = rankSearchTracks(viable, query);
                     if (relevant.length > 0) {
-                        await syncPlayerNode(node);
-                        console.log(`[SmartSearch] Found "${relevant[0].info.title}" via scsearch on node "${node.id}"`);
-                        return { ...res, tracks: relevant };
+                        const safeTracks = await ensureTrackDecodableForPlayer(relevant, node);
+                        console.log(`[SmartSearch] Found "${safeTracks[0].info.title}" via scsearch on node "${node.id}"`);
+                        return { ...res, tracks: safeTracks };
                     }
                 }
             }

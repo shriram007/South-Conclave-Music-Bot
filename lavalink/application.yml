@@ -57,21 +57,21 @@ plugins:
     allowDirectPlaylistIds: true
 
     # Clients are queried in order. MUSIC handles YouTube Music (and ytmsearch),
-    # followed by mobile/web variants.
     clients:
-      - MUSIC
-      - ANDROID_VR
+      - TVHTML5EMBEDDED
       - WEB
       - WEBEMBEDDED
-      - TVHTML5_SIMPLY
+      - IOS
+      - ANDROID
+      - MUSIC
 
     clientOptions:
+      TVHTML5EMBEDDED:
+        searching: false
+        playback: true
       MUSIC:
         searching: true
-        playback: true
-      TVHTML5_SIMPLY:
-        searching: false
-        playlistLoading: false
+        playback: false
 
     # Proof of Origin (poToken) for WEB client to bypass bot checks & SABR without formats.
     # Can be generated using tools like youtube-trusted-session-generator.
@@ -80,9 +80,9 @@ plugins:
       visitorData: "${YOUTUBE_VISITOR_DATA:}"
 
     oauth:
-      # Keep OAuth off unless a fresh disposable-account token is available.
-      # An invalid token makes youtube-source abort the entire Lavalink startup.
-      enabled: ${YOUTUBE_OAUTH_ENABLED:false}
+      # Keep OAuth off to prevent 400 invalid_grant polling loops when no device code is entered.
+      # TVHTML5EMBEDDED and WEB already provide unthrottled streaming without OAuth.
+      enabled: false
       refreshToken: "${YOUTUBE_REFRESH_TOKEN:}"
 
     remoteCipher:
@@ -94,7 +94,7 @@ logging:
   level:
     root: INFO
     lavalink: INFO
-    dev.lavalink.youtube.http.YoutubeOauth2Handler: INFO
+    dev.lavalink.youtube.http.YoutubeOauth2Handler: WARN
   request:
     # Payloads include Discord voice-session material; never log them.
     enabled: false

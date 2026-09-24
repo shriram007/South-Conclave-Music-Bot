@@ -453,3 +453,74 @@ test('Universal recovery recovers via SoundCloud when YouTube is unhealthy and J
   recordYouTubePlaybackSuccess();
 });
 
+test('cross-node track playback re-encodes bytecode natively for the active player node', async t => {
+  const timer = t.mock.method(globalThis, 'setInterval', () => ({ unref() {} }));
+  const manager = initLavalink({ guilds: { cache: new Map() }, channels: { cache: new Map() } });
+  timer.mock.restore();
+  manager.nodeManager.nodes.clear();
+
+  const foreignTrack = {
+    encoded: 'kasawa-encoded-bytecode',
+    info: info('Anthaathi', '29WzIwFvVdg'),
+    userData: { nodeId: 'Kasawa-MasterNode' },
+  };
+
+  const nativeTrack = {
+    encoded: 'custom-node-native-bytecode',
+    info: info('Anthaathi', '29WzIwFvVdg'),
+    userData: { nodeId: 'Primary-CustomNode' },
+  };
+
+  const customNode = {
+    id: 'Primary-CustomNode',
+    connected: true,
+    search: async () => ({ tracks: [nativeTrack] }),
+    updatePlayer: async (payload) => payload,
+  };
+
+  const kasawaNode = {
+    id: 'Kasawa-MasterNode',
+    connected: true,
+    search: async () => ({ tracks: [foreignTrack] }),
+    updatePlayer: async (payload) => payload,
+  };
+
+  manager.nodeManager.nodes.set('Primary-CustomNode', customNode);
+  manager.nodeManager.nodes.set('Kasawa-MasterNode', kasawaNode);
+
+  let updatedPayload = null;
+  const mockPlayer = {
+    guildId: 'test-guild',
+    node: customNode,
+    LavalinkManager: manager,
+    ping: { lavalink: 0 },
+    queue: {
+      current: foreignTrack,
+      tracks: [],
+      utils: { save() {} },
+    },
+    getData: () => null,
+    setData: () => {},
+    _emitDebugEvent: () => {},
+    node: {
+      ...customNode,
+      updatePlayer: async (opts) => {
+        updatedPayload = opts;
+        return opts;
+      },
+    },
+    changeNode: async (newNode) => {
+      mockPlayer.node = newNode;
+    },
+  };
+
+  // Call Player.prototype.play via the patched method
+  await manager.options.playerOptions; // ensure manager options
+  const { Player } = await import('lavalink-client');
+  await Player.prototype.play.call(mockPlayer);
+
+  // The track should have been re-encoded with custom node's native bytecode
+  assert.equal(foreignTrack.encoded, 'custom-node-native-bytecode');
+  assert.equal(foreignTrack.userData.nodeId, 'Primary-CustomNode');
+});
+
